@@ -21,6 +21,19 @@ jobs:
   backend:
     name: Backend checks
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: spotlab_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      TEST_POSTGRES_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/spotlab_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,6 +41,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.lock
       - run: python -m pip install ".[dev]"
       - run: python -m ruff check backend/src backend/tests
       - run: python -m mypy backend/src
@@ -51,4 +65,8 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm test
       - run: npm run build
+      - run: npm audit --audit-level=high
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
