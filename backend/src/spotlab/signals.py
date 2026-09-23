@@ -91,10 +91,23 @@ def signal_card(
             "invalidation": "5 saniyede süre aşımı, veri/strateji değişimi",
         }
     )
+    if report and report.get("sealed_test"):
+        normal = report["sealed_test"]["normal_costs"]
+        ci = normal["expectancy_ci"]
+        def pct(value: str) -> str:
+            return f"{D(value) * 100:.3f}%"
+        card["evidence"] = (
+            f"Örneklem dışı {normal['trade_count']} işlem; işlem başı net beklenti "
+            f"{pct(normal['net_expectancy'])}; belirsizlik aralığı "
+            f"[{pct(ci['lower'])}, {pct(ci['upper'])}]. Canlı onay değildir."
+        )
     signals = strategy_signal(candles, strategy)
     if healthy and signals and not signals[-1]:
         card["action"] = "BEKLE"
         card["reason"] = "Kapanmış mumda strateji giriş koşulu oluşmadı."
+    if report and not report.get("decision", {}).get("advantage_supported", False):
+        card["action"] = "İŞLEM YAPMA"
+        card["reason"] = "Araştırmada maliyet ve belirsizlik sonrası ekonomik avantaj doğrulanmadı."
     if not healthy:
         card["action"], card["reason"] = "İŞLEM YAPMA", "Veri sağlığı uygun değil."
     return card

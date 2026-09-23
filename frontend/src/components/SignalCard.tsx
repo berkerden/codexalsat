@@ -21,6 +21,25 @@ export function SignalCard({ market, now }: { market: MarketResponse; now: numbe
   const quoteExpired = !market.quote?.observed_at || now - market.quote.observed_at > 5_000
   const signalExpired = typeof signal?.valid_until === 'number' && now > signal.valid_until
   const currentQuality = market.quality.healthy && !quoteExpired && !signalExpired
+  const strategyLabels: Record<string, string> = {
+    pullback: 'Trend geri çekilmesi',
+    breakout: 'Hacimli kırılım',
+    mean_reversion: 'Ortalamaya dönüş',
+  }
+  const assumptionLabels: Record<string, string> = {
+    'fees are assumed because account- and symbol-specific rates were not supplied': 'Hesap ve sembole özel oran verilmediği için komisyon varsayıldı.',
+    'spread is split equally across entry and exit': 'Spread giriş ve çıkış arasında eşit bölündü.',
+    'slippage is applied once to each simulated fill': 'Kayma her sanal doluma bir kez uygulandı.',
+    'fees are valued in quote currency': 'Komisyon kotasyon varlığı cinsinden değerlendi.',
+  }
+  const assumptions = costs && Array.isArray(costs.assumptions) ? costs.assumptions : []
+  const formatCost = (key: string, value: unknown): string => {
+    const amount = Number(value)
+    if (!Number.isFinite(amount)) return '—'
+    if (key === 'entry_fee' || key === 'exit_fee') return `${decimal(amount * 100, 4)}%`
+    if (key === 'spread_bps' || key === 'slippage_bps') return `${decimal(amount, 3)} bp`
+    return decimal(amount, 4)
+  }
 
   return (
     <section className={`panel signal-panel ${trade ? 'signal-watch' : 'signal-no-trade'}`} aria-labelledby="signal-title">
@@ -50,7 +69,7 @@ export function SignalCard({ market, now }: { market: MarketResponse; now: numbe
         </ul>
       )}
       <dl className="metric-grid compact">
-        <div><dt>Strateji</dt><dd>{signal?.strategy || '—'}</dd></div>
+        <div><dt>Strateji</dt><dd>{typeof signal?.strategy === 'string' ? strategyLabels[signal.strategy] ?? signal.strategy : '—'}</dd></div>
         <div><dt>Veri zamanı</dt><dd>{time(typeof signal?.data_time === 'number' ? signal.data_time : signal?.observed_at)}</dd></div>
         <div><dt>Alış / Satış</dt><dd>{decimal(market.quote?.bid, 8)} / {decimal(market.quote?.ask, 8)}</dd></div>
         <div><dt>Spread</dt><dd>{decimal(market.quote?.spread_bps, 3)} bp</dd></div>
@@ -59,10 +78,17 @@ export function SignalCard({ market, now }: { market: MarketResponse; now: numbe
         <div className="cost-box">
           <strong>Maliyet varsayımları</strong>
           <dl>
-            {Object.entries(costs).map(([key, value]) => (
-              <div key={key}><dt>{labelize(key)}</dt><dd>{String(value)}</dd></div>
+            {Object.entries(costs).filter(([key]) => key !== 'assumptions').map(([key, value]) => (
+              <div key={key}><dt>{labelize(key)}</dt><dd>{formatCost(key, value)}</dd></div>
             ))}
           </dl>
+          {assumptions.length > 0 && (
+            <ul className="cost-assumptions">
+              {assumptions.map((item, index) => (
+                <li key={`${String(item)}-${index}`}>{assumptionLabels[String(item)] ?? 'Teknik maliyet varsayımı rapor ayrıntılarında kayıtlıdır.'}</li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
       {margin && (

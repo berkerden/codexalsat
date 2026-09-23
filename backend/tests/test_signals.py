@@ -20,3 +20,23 @@ def test_unit_scenario_is_not_an_expected_profit_or_position_recommendation() ->
     assert result["scenario_only"]
     assert result["margin"]["net_target_profit"] == D("1.798")
     assert result["valid_until"] == 128000
+
+
+def test_negative_evidence_is_visible_and_never_a_trade_recommendation() -> None:
+    q = Quote("BTCUSDT", D("100"), D("100"), D(10), D(10), 123000)
+    report = {
+        "selected_candidate": {"strategy": "breakout", "target_pct": ".02", "stop_pct": ".01"},
+        "parameters": {
+            "hold_minutes": 60,
+            "costs": {"entry_fee": ".001", "exit_fee": ".001", "slippage_bps": "0"},
+        },
+        "decision": {"advantage_supported": False},
+        "sealed_test": {"normal_costs": {
+            "trade_count": 120, "net_expectancy": "-.002",
+            "expectancy_ci": {"lower": "-.004", "upper": "-.001"},
+        }},
+    }
+    result = signal_card(q, [], True, empty_state(), report, D(".01"), D(5))
+    assert result["action"] == "İŞLEM YAPMA"
+    assert "120 işlem" in result["evidence"] and "-0.200%" in result["evidence"]
+    assert "avantaj doğrulanmadı" in result["reason"]

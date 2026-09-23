@@ -22,6 +22,11 @@ const navItems: { id: Tab; label: string; short: string }[] = [
   { id: 'operations', label: 'Operasyon', short: 'Durum' },
 ]
 
+function modeLabel(mode: string | null | undefined): string {
+  const labels: Record<string, string> = { suggestions: 'Öneriler', paper: 'Paper', live: 'Canlı' }
+  return mode ? labels[mode] ?? mode : 'Öneriler'
+}
+
 const emptyPaperForm = {
   strategy: 'pullback', capital: '1000', risk_per_trade: '0.005', daily_loss_limit: '0.02',
   max_drawdown: '0.08', max_open_risk: '0.01', target_pct: '0.015', stop_pct: '0.0075', fee_rate: '0.001',
@@ -70,13 +75,16 @@ function App() {
 
   useEffect(() => {
     const controller = new AbortController()
+    let pending = false
     const poll = () => {
+      if (pending) return
+      pending = true
       Promise.allSettled([api.status(controller.signal), api.paper(controller.signal)]).then(([statusResult, paperResult]) => {
         if (controller.signal.aborted) return
         if (statusResult.status === 'fulfilled') { setStatus(statusResult.value); setStatusError('') }
         else setStatusError(errorMessage(statusResult.reason))
         if (paperResult.status === 'fulfilled') setPaper(paperResult.value)
-      })
+      }).finally(() => { pending = false })
     }
     poll()
     const pollId = window.setInterval(poll, 3_000)
@@ -104,7 +112,10 @@ function App() {
   useEffect(() => {
     if (!venue || !symbol) return
     const controller = new AbortController()
+    let pending = false
     const poll = () => {
+      if (pending) return
+      pending = true
       api.market(venue, symbol, interval, controller.signal)
         .then((result) => {
           if (controller.signal.aborted) return
@@ -112,7 +123,10 @@ function App() {
           setMarket(result)
         })
         .catch((error: unknown) => { if (!controller.signal.aborted) setMarketError(errorMessage(error)) })
-        .finally(() => { if (!controller.signal.aborted) setMarketLoading(false) })
+        .finally(() => {
+          pending = false
+          if (!controller.signal.aborted) setMarketLoading(false)
+        })
     }
     poll()
     const pollId = window.setInterval(poll, 3_000)
@@ -169,7 +183,7 @@ function App() {
         <div className="workspace">
           <section className="page-intro">
             <div>
-              <span className="kicker">{selectedLabel} · {status?.mode || 'öneriler'}</span>
+              <span className="kicker">{selectedLabel} · {modeLabel(status?.mode)}</span>
               <h1>{tab === 'overview' ? 'Piyasa çalışma alanı' : navItems.find((item) => item.id === tab)?.label}</h1>
               <p>{introFor(tab)}</p>
             </div>
@@ -460,7 +474,7 @@ function Operations({ status, paper, error }: { status: StatusResponse | null; p
         <dl className="metric-grid">
           <div><dt>Sürüm</dt><dd>{status?.version || '—'}</dd></div>
           <div><dt>Borsa</dt><dd>{status?.venue || 'Seçilmedi'}</dd></div>
-          <div><dt>Mod</dt><dd>{status?.mode || '—'}</dd></div>
+          <div><dt>Mod</dt><dd>{modeLabel(status?.mode)}</dd></div>
           <div><dt>Paper giriş</dt><dd>{paper?.entries_enabled ? 'Açık' : 'Kapalı'}</dd></div>
         </dl>
         <dl className="metric-grid operations-extra">

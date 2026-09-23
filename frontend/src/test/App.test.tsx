@@ -16,6 +16,10 @@ const market = {
     evidence: 'Araştırma kanıtı değildir.', data_time: 1_700_000_600_000, scenario_only: true,
     quantity_basis: 'Paper yapılandırılmadığı için 1 birimlik gösterim.', holding_minutes: 60, valid_until: 1_700_000_605_000,
     expected_net_result: null,
+    costs: {
+      entry_fee: '0.001', exit_fee: '0.001', spread_bps: '0.030681312312', slippage_bps: '2',
+      assumptions: ['spread is split equally across entry and exit'],
+    },
     margin: { net_target_profit: '812.50', total_entry_cash: '65180.1', net_target_return: '0.0124', entry_fee: '65.18', target_exit_fee: '66.16', break_even_price: '65310.2', modeled_stop_loss: '620.4', net_reward_risk: '1.31' },
   },
 }
@@ -62,6 +66,11 @@ describe('SpotLab dashboard', () => {
     expect(await screen.findByRole('heading', { name: 'İŞLEM YAPMA' })).toBeInTheDocument()
     expect(screen.getByText('Örneklem dışı avantaj doğrulanmadı.')).toBeInTheDocument()
     expect(screen.getByText('Binance Global REST/WS')).toBeInTheDocument()
+    expect(screen.getByText('Trend geri çekilmesi')).toBeInTheDocument()
+    expect(screen.getAllByText('0,1%')).toHaveLength(2)
+    expect(screen.getAllByText('0,031 bp')).toHaveLength(2)
+    expect(screen.getByText('Spread giriş ve çıkış arasında eşit bölündü.')).toBeInTheDocument()
+    expect(screen.queryByText('suggestions')).not.toBeInTheDocument()
     expect(screen.getByText('Varsayımsal hedef senaryosu')).toBeInTheDocument()
     expect(screen.getByText('Paper yapılandırılmadığı için 1 birimlik gösterim.')).toBeInTheDocument()
     expect(screen.getByText(/beklenen net sonuç değildir/i)).toBeInTheDocument()
