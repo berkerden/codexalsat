@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+set -eu
+if [ -x .venv/bin/python ]; then
+  exec .venv/bin/python scripts/secret_scan.py --staged
+fi
+exec python3 scripts/secret_scan.py --staged

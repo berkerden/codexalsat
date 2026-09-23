@@ -27,6 +27,8 @@ services:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
       LIVE_TRADING_ENABLED: "false"
       CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1:5173}
+    volumes:
+      - market-data:/app/data
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
@@ -37,6 +39,8 @@ services:
   web:
     image: node:22-alpine
     working_dir: /app
+    environment:
+      API_PROXY_TARGET: http://api:8000
     volumes:
       - ./frontend:/app
       - frontend-node-modules:/app/node_modules
@@ -50,3 +54,4 @@ services:
 volumes:
   postgres-data:
   frontend-node-modules:
+  market-data:

@@ -14,6 +14,8 @@ COPY backend/src ./backend/src
 RUN pip install --upgrade pip \
     && pip install .
 
+RUN mkdir -p /app/data && chown -R spotlab:spotlab /app/data
+
 USER spotlab
 EXPOSE 8000
 
