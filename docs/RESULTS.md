@@ -23,7 +23,7 @@ GA: zamansal bağımlılık için dairesel blok bootstrap; tohum 1729, 400 tekra
 
 ## Tekrar üretim ve sınırlar
 
-Ham mumlar ve ayrıntılı raporlar yerel `data/market/` ve `data/reports/` altındadır; public Git içine kişisel kayıt veya büyük ham veri konmaz. Raporlarda veri SHA-256, çekirdek kaynak SHA-256, parametreler, ayrım sınırları ve seed bulunur. Her grubun gerçek zaman aralığı aşağıdadır. İlk indirme seri olduğundan uç mumların kapanışları grup başına farklıdır. Betiğe daha sonra ortak bitiş anından sonra kapanan mumları dışlama eklendi; bu tablo ilk tamamlanan çalışmayı saklar, düzeltme sonrasında sonuç seçmek için yeniden optimize edilmedi.
+Ham mumlar ve ayrıntılı raporlar yerel `data/market/` ve `data/reports/` altındadır; ilk çalışma raporları ayrıca `data/research-initial-20260923/` altında korunur; public Git içine kişisel kayıt veya büyük ham veri konmaz. Raporlarda veri SHA-256, çekirdek kaynak SHA-256, parametreler, ayrım sınırları ve seed bulunur. Her grubun gerçek zaman aralığı aşağıdadır. İlk indirme seri olduğundan uç mumların kapanışları grup başına farklıdır. Betiğe daha sonra ortak bitiş anından sonra kapanan mumları dışlama eklendi; bu tablo ilk tamamlanan çalışmayı saklar, düzeltme sonrasında sonuç seçmek için yeniden optimize edilmedi.
 
 | Parite | Periyot | Başlangıç UTC | Son mum kapanışı UTC | Veri SHA-256 |
 |---|---|---|---|---|

@@ -12,6 +12,22 @@ Panelde giriş durdurma ile pozisyon kapatma ayrı işlemdir. Kapatma isteği ö
 kalıcı yazılır, sonra yeni kotasyonda kalan miktar için sürdürülür. Motor kapanırsa
 simülasyon çıkışı bekler; gerçek borsa koruması varmış gibi yorumlanamaz.
 
+## Ayrı paper deneyi
+
+Mevcut paper oturumunun sembol, periyot ve risk kapsamı değiştirilemez; panelde
+üstteki piyasa seçimi başka olsa bile kayıtlı kapsam ayrıca gösterilir. Bu sürümde
+panel içinden yeni oturum/arşivleme akışı yoktur. Farklı bir sanal deney için önce
+girişleri durdurun, açık paper pozisyonunu kapatın ve sunucuları kapatın. Eski
+kayıtları silmeden ayrı veri diziniyle başlatın:
+
+```bash
+SPOTLAB_DATA_DIR=data/ikinci-deney bash scripts/run-local.sh
+```
+
+Bu dizinin ayrı sanal bakiyesi ve piyasa arşivi olur. Eski oturuma geri dönmek için
+sunucuları kapatıp önceki SPOTLAB_DATA_DIR ile başlatın; girişler kapalı başlar.
+Bu işlem gerçek hesap sıfırlaması veya canlı risk sınırını aşma yolu değildir.
+
 ## Yedek ve geri yükleme
 
 Önce panelden yeni girişleri durdurun; ardından `Ctrl+C` ile backend'i kapatın.

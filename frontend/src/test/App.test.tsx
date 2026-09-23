@@ -35,6 +35,21 @@ const paper = {
   position: null, orders: [], fills: [], reason: 'Paper trading henüz yapılandırılmadı.',
 }
 
+const researchReport = {
+  symbol: 'BTCUSDT', interval: '5m',
+  data: { duration_days: '182.5', pilot: false },
+  selected_candidate: { strategy: 'pullback', target_pct: '0.007', stop_pct: '0.004' },
+  sealed_test: {
+    normal_costs: { trade_count: 104, net_expectancy: '-0.003063' },
+    stress_costs: { net_expectancy: '-0.0042' },
+  },
+  decision: {
+    action: 'İŞLEM YAPMA',
+    note: 'Operational evidence thresholds are minimums, not a guarantee of advantage.',
+    blockers: ['multiple_comparison_adjusted_ci_not_positive', 'stress_cost_expectancy_not_positive'],
+  },
+}
+
 function json(value: unknown, statusCode = 200) {
   return Promise.resolve(new Response(JSON.stringify(value), { status: statusCode, headers: { 'Content-Type': 'application/json' } }))
 }
@@ -50,6 +65,7 @@ describe('SpotLab dashboard', () => {
         const requestedSymbol = path.includes('symbol=SOLUSDT') ? 'SOLUSDT' : 'BTCUSDT'
         return json({ ...market, symbol: requestedSymbol })
       }
+      if (path === '/api/research') return json(researchReport)
       return json({ detail: 'Testte tanımsız istek' }, 404)
     }))
   })
@@ -94,5 +110,37 @@ describe('SpotLab dashboard', () => {
     await userEvent.click(screen.getByRole('button', { name: /Operasyon/ }))
     expect(screen.getByRole('button', { name: 'Canlı modu etkinleştir' })).toBeDisabled()
     expect(await screen.findByText('Testnet yaşam döngüsü doğrulanmadı.')).toBeInTheDocument()
+  })
+
+  it('araştırma finansal oranlarını ve karar gerekçelerini Türkçe sunar', async () => {
+    render(<App />)
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /Spot parite/ })).toHaveValue('BTCUSDT'))
+    await userEvent.click(screen.getByRole('button', { name: /Araştırma/ }))
+    await userEvent.type(screen.getByLabelText('Giriş komisyonu'), '0.001')
+    await userEvent.type(screen.getByLabelText('Çıkış komisyonu'), '0.001')
+    await userEvent.type(screen.getByLabelText('Spread (bp)'), '1')
+    await userEvent.type(screen.getByLabelText('Kayma (bp)'), '2')
+    await userEvent.click(screen.getByRole('button', { name: 'Araştırmayı çalıştır' }))
+    expect(await screen.findByText('-0,3063%')).toBeInTheDocument()
+    expect(screen.getByText('-0,42%')).toBeInTheDocument()
+    expect(screen.getByText('Trend geri çekilmesi')).toBeInTheDocument()
+    expect(screen.getByText('Operasyonel kanıt eşikleri asgari koşullardır; avantaj garantisi değildir.')).toBeInTheDocument()
+    expect(screen.getByText('Çoklu karşılaştırmaya göre düzeltilmiş güven aralığı pozitif değil.')).toBeInTheDocument()
+  })
+
+  it('kilitli paper oturumunun kayıtlı kapsamını gösterir ve farklı periyotta yetkiyi kapatır', async () => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === '/api/status') return json(status)
+      if (path === '/api/paper') return json({ ...paper, config: { symbol: 'BTCUSDT', interval: '15m', strategy: 'pullback' } })
+      if (path.startsWith('/api/symbols')) return json({ symbols: ['BTCUSDT', 'SOLUSDT'] })
+      if (path.startsWith('/api/market')) return json(market)
+      return json({ detail: 'Testte tanımsız istek' }, 404)
+    })
+    render(<App />)
+    await userEvent.click(screen.getByRole('button', { name: /Paper işlem/ }))
+    expect(await screen.findByText(/Oturum:/)).toHaveTextContent('Oturum: BTCUSDT · 15m')
+    expect(screen.getByText(/Yetkiyi yenilemek için/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Aynı ayarlarla yetkilendir' })).toBeDisabled()
   })
 })

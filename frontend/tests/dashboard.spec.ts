@@ -31,3 +31,26 @@ test('Global BTC görünümü ve kilitli canlı operasyonu', async ({ page }) =>
   await expect(page.getByRole('button', { name: 'Canlı modu etkinleştir' })).toBeDisabled()
   await expect(page.getByText('Canlı emir adaptörü etkin değil.')).toBeVisible()
 })
+
+test('390px mobilde navigasyon açık ve paper kontrolleri viewport altında', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/')
+  const modeLabels = page.locator('.mode-short')
+  await expect(modeLabels.nth(0)).toHaveText('Öneri')
+  await expect(modeLabels.nth(0)).toBeVisible()
+  await expect(modeLabels.nth(1)).toHaveText('Paper')
+  await expect(modeLabels.nth(1)).toBeVisible()
+  await expect(modeLabels.nth(2)).toHaveText('Canlı')
+  await expect(modeLabels.nth(2)).toBeVisible()
+
+  const research = page.getByRole('button', { name: 'Araştır', exact: true })
+  await expect(research).toBeVisible()
+  await research.click()
+  await expect(page.getByRole('heading', { name: 'Araştırma', exact: true })).toBeVisible()
+
+  const controls = page.getByLabel('Paper acil kontrolleri')
+  const box = await controls.boundingBox()
+  expect(box).not.toBeNull()
+  expect(Math.round((box?.y ?? 0) + (box?.height ?? 0))).toBe(844)
+  expect(box?.y ?? 0).toBeGreaterThan(780)
+})

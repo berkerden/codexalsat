@@ -27,6 +27,16 @@ function modeLabel(mode: string | null | undefined): string {
   return mode ? labels[mode] ?? mode : 'Öneriler'
 }
 
+function strategyLabel(strategy: unknown): string {
+  if (typeof strategy !== 'string') return '—'
+  const labels: Record<string, string> = {
+    pullback: 'Trend geri çekilmesi',
+    breakout: 'Hacimli kırılım',
+    mean_reversion: 'Ortalamaya dönüş',
+  }
+  return labels[strategy] ?? strategy
+}
+
 const emptyPaperForm = {
   strategy: 'pullback', capital: '1000', risk_per_trade: '0.005', daily_loss_limit: '0.02',
   max_drawdown: '0.08', max_open_risk: '0.01', target_pct: '0.015', stop_pct: '0.0075', fee_rate: '0.001',
@@ -45,13 +55,13 @@ function ModeRail({ status, paper, onNavigate }: {
   return (
     <div className="mode-rail" aria-label="Çalışma kipleri">
       <button className="mode-item active" onClick={() => onNavigate('overview')}>
-        <span className="mode-icon">01</span><span><b>Öneriler</b><small>Salt okunur sinyal</small></span><i>Etkin</i>
+        <span className="mode-icon">01</span><span><b><span className="mode-full">Öneriler</span><span className="mode-short">Öneri</span></b><small>Salt okunur sinyal</small></span><i>Etkin</i>
       </button>
       <button className={`mode-item ${paperOn ? 'paper-on' : ''}`} onClick={() => onNavigate('paper')}>
-        <span className="mode-icon">02</span><span><b>Paper</b><small>Sanal bakiye</small></span><i>{paperOn ? 'Açık' : 'Kapalı'}</i>
+        <span className="mode-icon">02</span><span><b><span className="mode-full">Paper</span><span className="mode-short">Paper</span></b><small>Sanal bakiye</small></span><i>{paperOn ? 'Açık' : 'Kapalı'}</i>
       </button>
       <button className="mode-item disabled" onClick={() => onNavigate('operations')} aria-disabled="true">
-        <span className="mode-icon">03</span><span><b>Canlı</b><small>Gerçek emir</small></span><i>{status?.live_enabled ? 'Kontrol et' : 'Kilitli'}</i>
+        <span className="mode-icon">03</span><span><b><span className="mode-full">Canlı</span><span className="mode-short">Canlı</span></b><small>Gerçek emir</small></span><i>{status?.live_enabled ? 'Kontrol et' : 'Kilitli'}</i>
       </button>
     </div>
   )
@@ -338,6 +348,23 @@ function ResearchResult({ report, sessionReports }: { report: ResearchReport; se
   const stress = record(sealed.stress_costs)
   const action = typeof decision.action === 'string' ? decision.action : 'Sonuç yok'
   const blockers = Array.isArray(decision.blockers) ? decision.blockers : []
+  const blockerLabels: Record<string, string> = {
+    less_than_180_days: 'Veri süresi 180 günden kısa.',
+    fewer_than_100_effective_oos_trades: 'Etkin örneklem dışı işlem sayısı 100’den az.',
+    multiple_comparison_adjusted_ci_not_positive: 'Çoklu karşılaştırmaya göre düzeltilmiş güven aralığı pozitif değil.',
+    stress_cost_expectancy_not_positive: 'Stres maliyetleri altında net beklenti pozitif değil.',
+  }
+  const noteLabels: Record<string, string> = {
+    'Operational evidence thresholds are minimums, not a guarantee of advantage.': 'Operasyonel kanıt eşikleri asgari koşullardır; avantaj garantisi değildir.',
+    'Small-input result is a pilot and cannot authorize a period or live trade.': 'Kısa veri sonucu pilottur; periyot veya canlı işlem yetkisi vermez.',
+  }
+  const decisionNote = typeof decision.note === 'string'
+    ? noteLabels[decision.note] ?? decision.note
+    : 'Backend karar notu bulunmuyor.'
+  const percentage = (value: unknown): string => {
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—'
+    return `${decimal(Number(value) * 100, 4)}%`
+  }
   const comparisonRows = Object.entries(sessionReports).map(([key, value]) => {
     const itemDecision = record(value.decision)
     const itemData = record(value.data)
@@ -347,23 +374,23 @@ function ResearchResult({ report, sessionReports }: { report: ResearchReport; se
   return (
     <div className="research-result">
       <div className={`decision-banner ${action === 'AL' ? 'decision-positive' : ''}`}>
-        <span>Kanıt kararı</span><b>{action}</b><p>{typeof decision.note === 'string' ? decision.note : 'Backend karar notu bulunmuyor.'}</p>
+        <span>Kanıt kararı</span><b>{action}</b><p>{decisionNote}</p>
       </div>
       <dl className="report-values">
         <div><dt>Veri süresi</dt><dd>{decimal(typeof data.duration_days === 'string' ? data.duration_days : undefined, 1)} gün</dd></div>
         <div><dt>Rapor sınıfı</dt><dd>{data.pilot === true ? 'Pilot · yetki vermez' : data.pilot === false ? 'Eşik kapsamı' : '—'}</dd></div>
         <div><dt>Mühürlü test işlemi</dt><dd>{normal.trade_count === undefined ? '—' : String(normal.trade_count)}</dd></div>
-        <div><dt>Net beklenti</dt><dd>{normal.net_expectancy === null || normal.net_expectancy === undefined ? '—' : decimal(String(normal.net_expectancy), 6)}</dd></div>
-        <div><dt>Stres beklentisi</dt><dd>{stress.net_expectancy === null || stress.net_expectancy === undefined ? '—' : decimal(String(stress.net_expectancy), 6)}</dd></div>
-        <div><dt>Seçilen aile</dt><dd>{typeof selected.strategy === 'string' ? selected.strategy : '—'}</dd></div>
+        <div><dt>Net beklenti</dt><dd>{percentage(normal.net_expectancy)}</dd></div>
+        <div><dt>Stres beklentisi</dt><dd>{percentage(stress.net_expectancy)}</dd></div>
+        <div><dt>Seçilen aile</dt><dd>{strategyLabel(selected.strategy)}</dd></div>
       </dl>
-      {blockers.length > 0 && <div className="research-blockers"><b>Karar engelleri</b><ul>{blockers.map((item, index) => <li key={`${String(item)}-${index}`}>{String(item)}</li>)}</ul></div>}
+      {blockers.length > 0 && <div className="research-blockers"><b>Karar engelleri</b><ul>{blockers.map((item, index) => <li key={`${String(item)}-${index}`}>{blockerLabels[String(item)] ?? String(item)}</li>)}</ul></div>}
       {comparisonRows.length > 1 && (
         <div className="interval-comparison">
           <b>Bu oturumdaki periyotlar</b>
           <p>Aynı sembol ve tarayıcı oturumunda ayrı ayrı çalıştırılan raporlar; birleşik kanıt değildir.</p>
           <div className="comparison-table" role="table" aria-label="Araştırma periyot karşılaştırması">
-            {comparisonRows.map((row) => <div role="row" key={row.interval}><b role="cell">{row.interval}</b><span role="cell">{String(row.action ?? '—')}</span><span role="cell">{row.pilot === true ? 'Pilot' : 'Eşik'}</span><span role="cell">{String(row.trades ?? 0)} işlem</span><span role="cell">{row.expectancy == null ? '—' : decimal(String(row.expectancy), 6)}</span></div>)}
+            {comparisonRows.map((row) => <div role="row" key={row.interval}><b role="cell">{row.interval}</b><span role="cell">{String(row.action ?? '—')}</span><span role="cell">{row.pilot === true ? 'Pilot' : 'Eşik'}</span><span role="cell">{String(row.trades ?? 0)} işlem</span><span role="cell">{percentage(row.expectancy)}</span></div>)}
           </div>
         </div>
       )}
@@ -380,6 +407,9 @@ function Paper({ venue, symbol, interval, paper, onPaper }: {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const locked = Boolean(paper?.config)
+  const sessionSymbol = typeof paper?.config?.symbol === 'string' ? paper.config.symbol : ''
+  const sessionInterval = typeof paper?.config?.interval === 'string' ? paper.config.interval : ''
+  const contextMismatch = locked && (symbol !== sessionSymbol || interval !== sessionInterval)
   const displayedForm = paper?.config
     ? Object.fromEntries(
         Object.keys(form).map((key) => [
@@ -414,8 +444,9 @@ function Paper({ venue, symbol, interval, paper, onPaper }: {
       </section>
       <div className="two-column paper-layout">
         <form className="panel form-panel" onSubmit={start}>
-          <div className="panel-heading"><div><span className="eyebrow">Yalnız paper</span><h2>Sanal deney ayarları</h2></div>{locked && <span className="lock-tag">Sabit kayıt</span>}</div>
+          <div className="panel-heading"><div><span className="eyebrow">Yalnız paper</span><h2>Sanal deney ayarları</h2>{locked && <p className="session-scope">Oturum: <b>{sessionSymbol}</b> · <b>{sessionInterval}</b></p>}</div>{locked && <span className="lock-tag">Sabit kayıt</span>}</div>
           <p className="form-copy">{locked ? 'Bu oturumun ayarları değiştirilemez. Başlat düğmesi aynı ayarlarla süreli giriş yetkisini yeniler.' : 'Alanlarda yalnız paper için düzenlenebilir bir 1.000 USDT deney örneği var. Bunlar gerçek sermaye veya canlı risk yetkisi değildir.'}</p>
+          {contextMismatch && <div className="inline-error scope-warning" role="status">Yetkiyi yenilemek için üstte <b>{sessionSymbol}</b> ve <b>{sessionInterval}</b> seçin. Mevcut paper oturumunun kapsamı değiştirilemez.</div>}
           <fieldset disabled={locked || loading}>
             <div className="form-grid">
               <label className="field"><span>Strateji</span><select value={displayedForm.strategy} onChange={(e) => update('strategy', e.target.value)}><option value="pullback">Trend geri çekilmesi</option><option value="breakout">Hacimli kırılım</option><option value="mean_reversion">Ortalamaya dönüş</option></select></label>
@@ -437,7 +468,7 @@ function Paper({ venue, symbol, interval, paper, onPaper }: {
           </fieldset>
           {error && <div className="inline-error" role="alert">{error}</div>}
           <div className="button-row">
-            <button className="primary-button" disabled={loading || !venue || !symbol}>{locked ? 'Aynı ayarlarla yetkilendir' : 'Paper oturumu başlat'}</button>
+            <button className="primary-button" disabled={loading || !venue || !symbol || contextMismatch}>{locked ? 'Aynı ayarlarla yetkilendir' : 'Paper oturumu başlat'}</button>
             <button type="button" className="secondary-button" disabled={loading || !paper?.entries_enabled} onClick={() => void mutate(api.paperStop)}>Girişleri durdur</button>
           </div>
         </form>
