@@ -1,0 +1,46 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+.venv/
+.tools/
+venv/
+dist/
+build/
+*.egg-info/
+
+# JavaScript
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/test-results/
+frontend/playwright-report/
+*.tsbuildinfo
+npm-debug.log*
+
+# Application state and generated market data
+data/
+*.parquet
+*.duckdb
+*.sqlite*
+postgres-data/
+backups/
+logs/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/

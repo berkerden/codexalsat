@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "spotlab"
+version = "0.1.0"
+description = "Local-first spot crypto research and controlled trading application"
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.34,<1",
+  "pydantic-settings>=2.7,<3",
+  "sqlalchemy>=2.0,<3",
+  "psycopg[binary]>=3.2,<4",
+  "httpx>=0.28,<1",
+  "websockets>=14,<16",
+  "numpy>=2.2,<3",
+  "pandas>=2.2,<3",
+  "pyarrow>=18,<24",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.15,<2",
+  "pytest>=9.0.3,<10",
+  "pytest-asyncio>=1,<2",
+  "pytest-cov>=6,<7",
+  "ruff>=0.9,<1",
+  "build>=1.2,<2",
+  "pip-audit>=2.8,<3",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/src/spotlab"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["backend/tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["backend/src", "backend/tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["backend/src"]
+explicit_package_bases = true
+mypy_path = "backend/src"
