@@ -16,6 +16,7 @@ from spotlab.orders import (
     ExchangeUpdate,
     InsufficientInventory,
     OrderConflict,
+    OrderError,
     OrderInvariantError,
     OrderLifecycle,
     OrderRequest,
@@ -142,6 +143,8 @@ async def test_timeout_is_unknown_and_same_intent_is_never_resent(database_url: 
     second = await lifecycle.submit(request, filters())
     assert first.state is OrderState.UNKNOWN
     assert second.state is OrderState.UNKNOWN
+    assert first.error == "TimeoutError"
+    assert "submit timed out" not in (first.error or "")
     assert transport.submit_calls == 1
     with pytest.raises(OrderConflict):
         lifecycle.store.create_or_get(replace(request, price=D("101")))
@@ -171,6 +174,171 @@ async def test_timeout_is_settled_by_exchange_query_without_resubmit(database_ur
     assert transport.query_calls == 1
 
 
+@pytest.mark.asyncio
+async def test_invalid_submit_response_is_durably_unknown(database_url: str) -> None:
+    transport = FakeTransport()
+    request = order()
+    transport.submit_result = update(request, OrderState.FILLED, "2")
+    lifecycle = OrderLifecycle(database_url, transport)
+
+    with pytest.raises(OrderInvariantError, match="lacks confirmed fills"):
+        await lifecycle.submit(request, filters())
+
+    record = lifecycle.store.get(request.intent_id)
+    assert record.state is OrderState.UNKNOWN
+    assert record.error == "OrderInvariantError"
+    assert record.exchange_order_id is None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_identity_mismatch_stays_unknown(database_url: str) -> None:
+    transport = FakeTransport()
+    request = order()
+    transport.submit_result = TimeoutError()
+    lifecycle = OrderLifecycle(database_url, transport)
+    await lifecycle.submit(request, filters())
+    transport.query_result = replace(
+        update(request, OrderState.NEW, "0"),
+        symbol="ETHUSDT",
+        side="BUY",
+        original_quantity=D("2"),
+    )
+
+    with pytest.raises(OrderInvariantError, match="symbol does not match"):
+        await lifecycle.reconcile(request.intent_id)
+
+    record = lifecycle.store.get(request.intent_id)
+    assert record.state is OrderState.UNKNOWN
+    assert record.error == "OrderInvariantError"
+
+
+@pytest.mark.asyncio
+async def test_invalid_cancel_response_keeps_sell_reserved(database_url: str) -> None:
+    transport = FakeTransport()
+    lifecycle = OrderLifecycle(database_url, transport)
+    buy = order(quantity="2")
+    lifecycle.store.create_or_get(buy)
+    lifecycle.store.apply_update(
+        buy.intent_id,
+        update(
+            buy,
+            OrderState.FILLED,
+            "2",
+            (ConfirmedFill("cancel-buy", D("2"), D("200"), D("0.2"), "USDT"),),
+        ),
+    )
+    sell = order("cancel-sell", "SELL", "1")
+    transport.submit_result = update(sell, OrderState.NEW, "0")
+    await lifecycle.submit(sell, filters())
+    transport.cancel_result = replace(
+        update(sell, OrderState.CANCELED, "0"),
+        symbol="BTCUSDT",
+        side="SELL",
+        original_quantity=D("2"),
+    )
+
+    with pytest.raises(OrderInvariantError, match="original quantity does not match"):
+        await lifecycle.cancel(sell.intent_id)
+
+    record = lifecycle.store.get(sell.intent_id)
+    assert record.state is OrderState.UNKNOWN
+    assert record.cancel_requested
+    assert lifecycle.store.available_inventory("run-1", "BTCUSDT") == D("1")
+
+
+@pytest.mark.parametrize(
+    ("mismatch", "message"),
+    [
+        ({"order_type": "MARKET"}, "order type does not match"),
+        ({"limit_price": D("101")}, "limit price does not match"),
+        ({"time_in_force": "IOC"}, "time in force does not match"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_fresh_submit_identity_mismatch_keeps_sell_reserved(
+    database_url: str, mismatch: dict[str, object], message: str
+) -> None:
+    transport = FakeTransport()
+    lifecycle = OrderLifecycle(database_url, transport)
+    buy = order(quantity="2")
+    lifecycle.store.create_or_get(buy)
+    lifecycle.store.apply_update(
+        buy.intent_id,
+        update(
+            buy,
+            OrderState.FILLED,
+            "2",
+            (ConfirmedFill("identity-buy", D("2"), D("200"), D("0.2"), "USDT"),),
+        ),
+    )
+    sell = order("identity-sell", "SELL", "1")
+    identity: dict[str, object] = {
+        "symbol": "BTCUSDT",
+        "side": "SELL",
+        "original_quantity": D("1"),
+        "order_type": "LIMIT",
+        "limit_price": D("100"),
+        "time_in_force": "GTC",
+    }
+    identity.update(mismatch)
+    transport.submit_result = replace(update(sell, OrderState.NEW, "0"), **identity)
+
+    with pytest.raises(OrderInvariantError, match=message):
+        await lifecycle.submit(sell, filters())
+
+    assert lifecycle.store.get(sell.intent_id).state is OrderState.UNKNOWN
+    assert lifecycle.store.available_inventory("run-1", "BTCUSDT") == D("1")
+
+
+@pytest.mark.parametrize(
+    ("mismatch", "message"),
+    [
+        ({"order_type": "MARKET"}, "order type does not match"),
+        ({"limit_price": D("101")}, "limit price does not match"),
+        ({"time_in_force": "IOC"}, "time in force does not match"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_restart_query_identity_mismatch_keeps_sell_reserved(
+    database_url: str, mismatch: dict[str, object], message: str
+) -> None:
+    store = OrderStore(database_url)
+    buy = order(quantity="2")
+    store.create_or_get(buy)
+    store.apply_update(
+        buy.intent_id,
+        update(
+            buy,
+            OrderState.FILLED,
+            "2",
+            (ConfirmedFill("restart-buy", D("2"), D("200"), D("0.2"), "USDT"),),
+        ),
+    )
+    sell = order("restart-sell", "SELL", "1")
+    store.create_or_get(sell)
+    assert store.claim_submission(sell.intent_id)
+
+    transport = FakeTransport()
+    lifecycle = OrderLifecycle(database_url, transport)
+    assert lifecycle.store.get(sell.intent_id).state is OrderState.UNKNOWN
+    identity: dict[str, object] = {
+        "symbol": "BTCUSDT",
+        "side": "SELL",
+        "original_quantity": D("1"),
+        "order_type": "LIMIT",
+        "limit_price": D("100"),
+        "time_in_force": "GTC",
+    }
+    identity.update(mismatch)
+    transport.query_result = replace(update(sell, OrderState.NEW, "0"), **identity)
+
+    with pytest.raises(OrderInvariantError, match=message):
+        await lifecycle.reconcile(sell.intent_id)
+
+    assert lifecycle.store.get(sell.intent_id).state is OrderState.UNKNOWN
+    assert lifecycle.store.available_inventory("run-1", "BTCUSDT") == D("1")
+
+
 def test_partial_fills_deduplicate_and_accept_out_of_order(database_url: str) -> None:
     store = OrderStore(database_url)
     request = order()
@@ -197,6 +365,24 @@ def test_partial_fills_deduplicate_and_accept_out_of_order(database_url: str) ->
     assert complete.state is OrderState.FILLED
 
 
+def test_partial_fill_cannot_regress_to_new(database_url: str) -> None:
+    store = OrderStore(database_url)
+    request = order()
+    store.create_or_get(request)
+    partial = store.apply_update(
+        request.intent_id,
+        update(request, OrderState.PARTIALLY_FILLED, "1", (fill("partial"),)),
+    )
+    assert partial.state is OrderState.PARTIALLY_FILLED
+
+    stale_new = store.apply_update(
+        request.intent_id,
+        update(request, OrderState.NEW, "1"),
+    )
+    assert stale_new.state is OrderState.PARTIALLY_FILLED
+    assert stale_new.confirmed_quantity == D("1")
+
+
 def test_conflicting_or_inconsistent_exchange_events_roll_back(database_url: str) -> None:
     store = OrderStore(database_url)
     request = order()
@@ -212,12 +398,158 @@ def test_conflicting_or_inconsistent_exchange_events_roll_back(database_url: str
             update(request, OrderState.PARTIALLY_FILLED, "1", (conflict,)),
         )
     wrong_fee_asset = ConfirmedFill("trade-2", D("1"), D("100"), D("0.1"), "BNB")
-    with pytest.raises(OrderInvariantError, match="quote-asset"):
+    with pytest.raises(OrderInvariantError, match="base or quote"):
         store.apply_update(
             request.intent_id,
             update(request, OrderState.FILLED, "2", (wrong_fee_asset,)),
         )
     assert store.get(request.intent_id).confirmed_quantity == D("1")
+
+
+def test_base_asset_buy_fee_reduces_sellable_inventory_once(database_url: str) -> None:
+    store = OrderStore(database_url)
+    request = order(quantity="1")
+    store.create_or_get(request)
+    base_fee_fill = ConfirmedFill("base-fee-buy", D("1"), D("100"), D("0.1"), "BTC", D("0.001"))
+    event = update(request, OrderState.FILLED, "1", (base_fee_fill,))
+
+    first = store.apply_update(request.intent_id, event)
+    duplicate = store.apply_update(request.intent_id, event)
+
+    assert first.confirmed_quantity == D("1")
+    assert first.confirmed_fee_quote == D("0.1")
+    assert duplicate.confirmed_quantity == D("1")
+    assert store.available_inventory("run-1", "BTCUSDT") == D("0.999")
+
+
+def test_base_asset_sell_fee_cannot_oversell_inventory(database_url: str) -> None:
+    store = OrderStore(database_url)
+    buy = order(quantity="1")
+    store.create_or_get(buy)
+    store.apply_update(
+        buy.intent_id,
+        update(
+            buy,
+            OrderState.FILLED,
+            "1",
+            (ConfirmedFill("buy-one", D("1"), D("100"), D("0.1"), "USDT"),),
+        ),
+    )
+    sell = order("sell-with-base-fee", "SELL", "1")
+    store.create_or_get(sell)
+    sell_fill = ConfirmedFill("sell-base-fee", D("1"), D("100"), D("0.1"), "BTC", D("0.001"))
+
+    with pytest.raises(OrderInvariantError, match="base fees exceed"):
+        store.apply_update(
+            sell.intent_id,
+            update(sell, OrderState.FILLED, "1", (sell_fill,)),
+        )
+
+    assert store.get(sell.intent_id).confirmed_quantity == D("0")
+
+
+def test_base_asset_fee_requires_matching_quote_valuation(database_url: str) -> None:
+    store = OrderStore(database_url)
+    request = order(quantity="1")
+    store.create_or_get(request)
+    inconsistent = ConfirmedFill("bad-valuation", D("1"), D("100"), D("0.2"), "BTC", D("0.001"))
+
+    with pytest.raises(OrderInvariantError, match="valuation is inconsistent"):
+        store.apply_update(
+            request.intent_id,
+            update(request, OrderState.FILLED, "1", (inconsistent,)),
+        )
+
+
+def test_list_records_can_filter_inventory_scope_and_symbol(database_url: str) -> None:
+    store = OrderStore(database_url)
+    btc = order()
+    sol = replace(order("sol", scope="other"), symbol="SOLUSDT")
+    store.create_or_get(btc)
+    store.create_or_get(sol)
+
+    assert [record.request.intent_id for record in store.list_records()] == [
+        "buy-1",
+        "sol",
+    ]
+    assert store.list_records(inventory_scope="run-1") == (store.get("buy-1"),)
+    assert store.list_records(symbol="SOLUSDT") == (store.get("sol"),)
+
+
+def test_oco_intents_are_limited_to_sell_orders() -> None:
+    replace(order(side="SELL"), order_type="OCO").validate()
+    with pytest.raises(ValueError, match="OCO intents must be SELL"):
+        replace(order(), order_type="OCO").validate()
+
+
+@pytest.mark.asyncio
+async def test_generic_lifecycle_refuses_oco_without_side_effects(
+    database_url: str,
+) -> None:
+    transport = FakeTransport()
+    lifecycle = OrderLifecycle(database_url, transport)
+    oco = replace(order("oco", "SELL", "1"), order_type="OCO")
+
+    with pytest.raises(OrderError, match="ProtectionLifecycle"):
+        await lifecycle.submit(oco, filters())
+    with pytest.raises(KeyError):
+        lifecycle.store.get(oco.intent_id)
+    assert transport.submit_calls == 0
+
+    buy = order(quantity="1")
+    lifecycle.store.create_or_get(buy)
+    lifecycle.store.apply_update(
+        buy.intent_id,
+        update(
+            buy,
+            OrderState.FILLED,
+            "1",
+            (ConfirmedFill("oco-buy", D("1"), D("100"), D("0.1"), "USDT"),),
+        ),
+    )
+    lifecycle.store.create_or_get(oco)
+
+    with pytest.raises(OrderError, match="ProtectionLifecycle"):
+        await lifecycle.reconcile(oco.intent_id)
+    with pytest.raises(OrderError, match="ProtectionLifecycle"):
+        await lifecycle.cancel(oco.intent_id)
+
+    record = lifecycle.store.get(oco.intent_id)
+    assert record.state is OrderState.INTENDED
+    assert not record.cancel_requested
+    assert transport.query_calls == 0
+    assert transport.cancel_calls == 0
+
+
+def test_legacy_fill_table_migrates_base_fee_with_zero_default(tmp_path: Path) -> None:
+    database_url = "sqlite:///" + str(tmp_path / "legacy.sqlite")
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE order_fills ("
+                "exchange_trade_id VARCHAR(128) PRIMARY KEY,"
+                "intent_id VARCHAR(128) NOT NULL,quantity VARCHAR(128) NOT NULL,"
+                "quote_quantity VARCHAR(128) NOT NULL,fee_quote VARCHAR(128) NOT NULL,"
+                "fee_asset VARCHAR(32) NOT NULL)"
+            )
+        )
+    engine.dispose()
+
+    store = OrderStore(database_url)
+    request = order(quantity="1")
+    store.create_or_get(request)
+    store.apply_update(
+        request.intent_id,
+        update(request, OrderState.FILLED, "1", (fill("post-migration"),)),
+    )
+
+    with store.db.connect() as connection:
+        fee_base = connection.execute(
+            text("SELECT fee_base FROM order_fills WHERE exchange_trade_id='post-migration'")
+        ).scalar_one()
+    assert D(fee_base) == D("0")
+    assert store.available_inventory("run-1", "BTCUSDT") == D("1")
 
 
 @pytest.mark.asyncio

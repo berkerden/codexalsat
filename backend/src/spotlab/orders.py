@@ -16,7 +16,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Connection, Engine, RowMapping
 
 D = Decimal
@@ -80,9 +80,7 @@ class ExchangeFilters:
     max_notional: Decimal | None = None
 
 
-def validate_order_filters(
-    quantity: Decimal, price: Decimal, filters: ExchangeFilters
-) -> None:
+def validate_order_filters(quantity: Decimal, price: Decimal, filters: ExchangeFilters) -> None:
     """Validate an order against a fresh exchange metadata snapshot."""
     quantity = _decimal(quantity, "quantity")
     price = _decimal(price, "price")
@@ -92,9 +90,7 @@ def validate_order_filters(
     maximum = _decimal(filters.max_quantity, "max_quantity")
     min_notional = _decimal(filters.min_notional, "min_notional")
     max_notional = (
-        None
-        if filters.max_notional is None
-        else _decimal(filters.max_notional, "max_notional")
+        None if filters.max_notional is None else _decimal(filters.max_notional, "max_notional")
     )
     if minimum > maximum:
         raise OrderError("min_quantity exceeds max_quantity")
@@ -137,8 +133,10 @@ class OrderRequest:
                 raise OrderError(f"{name} must contain 1 to 128 characters")
         if self.side not in {"BUY", "SELL"}:
             raise OrderError("side must be BUY or SELL")
-        if self.order_type != "LIMIT":
-            raise OrderError("only LIMIT intents are supported by this lifecycle core")
+        if self.order_type not in {"LIMIT", "OCO"}:
+            raise OrderError("order_type must be LIMIT or OCO")
+        if self.order_type == "OCO" and self.side != "SELL":
+            raise OrderError("OCO intents must be SELL orders")
         _decimal(self.quantity, "quantity")
         _decimal(self.price, "price")
 
@@ -150,6 +148,7 @@ class ConfirmedFill:
     quote_quantity: Decimal
     fee_quote: Decimal
     fee_asset: str
+    fee_base: Decimal = ZERO
 
 
 @dataclass(frozen=True)
@@ -159,6 +158,12 @@ class ExchangeUpdate:
     status: OrderState
     cumulative_quantity: Decimal
     fills: Sequence[ConfirmedFill] = ()
+    symbol: str | None = None
+    side: str | None = None
+    original_quantity: Decimal | None = None
+    order_type: str | None = None
+    limit_price: Decimal | None = None
+    time_in_force: str | None = None
 
 
 @dataclass(frozen=True)
@@ -248,10 +253,19 @@ class OrderStore:
                     "exchange_trade_id VARCHAR(128) PRIMARY KEY,"
                     "intent_id VARCHAR(128) NOT NULL,quantity VARCHAR(128) NOT NULL,"
                     "quote_quantity VARCHAR(128) NOT NULL,fee_quote VARCHAR(128) NOT NULL,"
-                    "fee_asset VARCHAR(32) NOT NULL,FOREIGN KEY(intent_id) "
+                    "fee_asset VARCHAR(32) NOT NULL,fee_base VARCHAR(128) NOT NULL "
+                    "DEFAULT '0',FOREIGN KEY(intent_id) "
                     "REFERENCES order_intents(intent_id))"
                 )
             )
+            columns = {column["name"] for column in inspect(conn).get_columns("order_fills")}
+            if "fee_base" not in columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE order_fills ADD COLUMN fee_base VARCHAR(128) "
+                        "NOT NULL DEFAULT '0'"
+                    )
+                )
 
     @contextmanager
     def _writer(self) -> Iterator[Connection]:
@@ -314,13 +328,37 @@ class OrderStore:
 
     def get(self, intent_id: str) -> OrderRecord:
         with self.db.connect() as conn:
-            row = conn.execute(
-                text("SELECT * FROM order_intents WHERE intent_id=:intent_id"),
-                {"intent_id": intent_id},
-            ).mappings().one_or_none()
+            row = (
+                conn.execute(
+                    text("SELECT * FROM order_intents WHERE intent_id=:intent_id"),
+                    {"intent_id": intent_id},
+                )
+                .mappings()
+                .one_or_none()
+            )
         if row is None:
             raise KeyError(intent_id)
         return self._record_from_row(row)
+
+    def list_records(
+        self, *, inventory_scope: str | None = None, symbol: str | None = None
+    ) -> tuple[OrderRecord, ...]:
+        """Return a stable snapshot, optionally limited to one inventory scope/symbol."""
+        clauses: list[str] = []
+        params: dict[str, str] = {}
+        if inventory_scope is not None:
+            clauses.append("inventory_scope=:scope")
+            params["scope"] = inventory_scope
+        if symbol is not None:
+            clauses.append("symbol=:symbol")
+            params["symbol"] = symbol
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                text("SELECT * FROM order_intents" + where + " ORDER BY created_at,intent_id"),
+                params,
+            ).mappings()
+            return tuple(self._record_from_row(row) for row in rows)
 
     def create_or_get(self, request: OrderRequest) -> tuple[OrderRecord, bool]:
         request.validate()
@@ -338,9 +376,7 @@ class OrderStore:
             if other is not None:
                 raise OrderConflict("client_order_id is already assigned to another intent")
             if request.side == "SELL":
-                available = self._available_inventory(
-                    conn, request.inventory_scope, request.symbol
-                )
+                available = self._available_inventory(conn, request.inventory_scope, request.symbol)
                 if request.quantity > available:
                     raise InsufficientInventory(
                         f"SELL quantity {request.quantity} exceeds available {available}"
@@ -377,20 +413,34 @@ class OrderStore:
     def _available_inventory(self, conn: Connection, scope: str, symbol: str) -> Decimal:
         rows = conn.execute(
             text(
-                "SELECT side,state,quantity,confirmed_quantity,"
+                "SELECT intent_id,side,state,quantity,confirmed_quantity,"
                 "exchange_cumulative_quantity FROM order_intents "
                 "WHERE inventory_scope=:scope AND symbol=:symbol"
             ),
             {"scope": scope, "symbol": symbol},
         ).mappings()
+        base_fees: dict[str, Decimal] = {}
+        fee_rows = conn.execute(
+            text(
+                "SELECT f.intent_id,f.fee_base FROM order_fills f "
+                "JOIN order_intents i ON i.intent_id=f.intent_id "
+                "WHERE i.inventory_scope=:scope AND i.symbol=:symbol"
+            ),
+            {"scope": scope, "symbol": symbol},
+        ).mappings()
+        for fee_row in fee_rows:
+            base_fees[fee_row["intent_id"]] = base_fees.get(fee_row["intent_id"], ZERO) + D(
+                fee_row["fee_base"]
+            )
         confirmed = ZERO
         reserved = ZERO
         for row in rows:
             filled = D(row["confirmed_quantity"])
+            fee_base = base_fees.get(row["intent_id"], ZERO)
             if row["side"] == "BUY":
-                confirmed += filled
+                confirmed += filled - fee_base
             else:
-                confirmed -= filled
+                confirmed -= filled + fee_base
                 state = OrderState(row["state"])
                 if state not in TERMINAL_STATES:
                     reserved += D(row["quantity"]) - filled
@@ -398,10 +448,15 @@ class OrderStore:
                     # A cancel can precede delayed trade details. Keep the
                     # exchange-reported executed remainder unavailable until
                     # its confirmed fills arrive.
-                    reserved += max(
-                        ZERO, D(row["exchange_cumulative_quantity"]) - filled
-                    )
+                    reserved += max(ZERO, D(row["exchange_cumulative_quantity"]) - filled)
         return confirmed - reserved
+
+    def available_inventory(self, inventory_scope: str, symbol: str) -> Decimal:
+        """Return unreserved, confirmed bot inventory for a scope and symbol."""
+        if not inventory_scope or not symbol:
+            raise OrderError("inventory_scope and symbol are required")
+        with self._writer() as conn:
+            return self._available_inventory(conn, inventory_scope, symbol)
 
     def claim_submission(self, intent_id: str) -> bool:
         with self._writer() as conn:
@@ -412,8 +467,7 @@ class OrderStore:
                 return False
             conn.execute(
                 text(
-                    "UPDATE order_intents SET state=:state,updated_at=:at "
-                    "WHERE intent_id=:intent"
+                    "UPDATE order_intents SET state=:state,updated_at=:at WHERE intent_id=:intent"
                 ),
                 {
                     "state": OrderState.SUBMITTING.value,
@@ -468,14 +522,27 @@ class OrderStore:
             return self._record_from_row(current), True
 
     @staticmethod
-    def _validate_fill(fill: ConfirmedFill, quote_asset: str) -> None:
+    def _validate_fill(fill: ConfirmedFill, symbol: str, quote_asset: str) -> None:
         if not fill.trade_id or len(fill.trade_id) > 128:
             raise OrderInvariantError("exchange trade ID is missing or too long")
         _decimal(fill.quantity, "fill quantity")
         _decimal(fill.quote_quantity, "fill quote quantity")
         _decimal(fill.fee_quote, "fill quote fee", allow_zero=True)
-        if fill.fee_asset != quote_asset:
-            raise OrderInvariantError("only confirmed quote-asset fees are accepted")
+        _decimal(fill.fee_base, "fill base fee", allow_zero=True)
+        if not symbol.endswith(quote_asset) or symbol == quote_asset:
+            raise OrderInvariantError("symbol does not identify a supported base asset")
+        base_asset = symbol[: -len(quote_asset)]
+        if fill.fee_asset == quote_asset:
+            if fill.fee_base != ZERO:
+                raise OrderInvariantError("quote-asset fee cannot include a base fee")
+        elif fill.fee_asset == base_asset:
+            if fill.fee_base > fill.quantity:
+                raise OrderInvariantError("base-asset fee exceeds fill quantity")
+            expected_quote_fee = fill.fee_base * fill.quote_quantity / fill.quantity
+            if fill.fee_quote != expected_quote_fee:
+                raise OrderInvariantError("base-asset fee quote valuation is inconsistent")
+        else:
+            raise OrderInvariantError("fee asset must be the order base or quote asset")
 
     def apply_update(self, intent_id: str, update: ExchangeUpdate) -> OrderRecord:
         if update.status not in {
@@ -486,9 +553,7 @@ class OrderStore:
             OrderState.REJECTED,
         }:
             raise OrderInvariantError("exchange update has a non-exchange state")
-        cumulative = _decimal(
-            update.cumulative_quantity, "cumulative_quantity", allow_zero=True
-        )
+        cumulative = _decimal(update.cumulative_quantity, "cumulative_quantity", allow_zero=True)
         with self._writer() as conn:
             row = self._locked_row(conn, intent_id)
             if row is None:
@@ -496,6 +561,24 @@ class OrderStore:
             request = self._request_from_row(row)
             if update.client_order_id != request.client_order_id:
                 raise OrderInvariantError("client order ID does not match intent")
+            if update.symbol is not None and update.symbol != request.symbol:
+                raise OrderInvariantError("exchange symbol does not match intent")
+            if update.side is not None and update.side != request.side:
+                raise OrderInvariantError("exchange side does not match intent")
+            if update.original_quantity is not None:
+                original_quantity = _decimal(update.original_quantity, "exchange original quantity")
+                if original_quantity != request.quantity:
+                    raise OrderInvariantError("exchange original quantity does not match intent")
+            if update.order_type is not None and update.order_type != request.order_type:
+                raise OrderInvariantError("exchange order type does not match intent")
+            if update.limit_price is not None:
+                limit_price = _decimal(update.limit_price, "exchange limit price")
+                if limit_price != request.price:
+                    raise OrderInvariantError("exchange limit price does not match intent")
+            if update.time_in_force is not None and (
+                request.order_type != "LIMIT" or update.time_in_force != "GTC"
+            ):
+                raise OrderInvariantError("exchange time in force does not match intent")
             if not update.exchange_order_id or len(update.exchange_order_id) > 128:
                 raise OrderInvariantError("exchange order ID is missing or too long")
             known_exchange_id = row["exchange_order_id"]
@@ -512,11 +595,15 @@ class OrderStore:
             if prior_state is OrderState.REJECTED and update.fills:
                 raise OrderInvariantError("REJECTED order cannot later contain fills")
             for fill in update.fills:
-                self._validate_fill(fill, request.quote_asset)
-                duplicate = conn.execute(
-                    text("SELECT * FROM order_fills WHERE exchange_trade_id=:trade"),
-                    {"trade": fill.trade_id},
-                ).mappings().one_or_none()
+                self._validate_fill(fill, request.symbol, request.quote_asset)
+                duplicate = (
+                    conn.execute(
+                        text("SELECT * FROM order_fills WHERE exchange_trade_id=:trade"),
+                        {"trade": fill.trade_id},
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
                 if duplicate is not None:
                     same = (
                         duplicate["intent_id"] == intent_id
@@ -524,6 +611,7 @@ class OrderStore:
                         and D(duplicate["quote_quantity"]) == fill.quote_quantity
                         and D(duplicate["fee_quote"]) == fill.fee_quote
                         and duplicate["fee_asset"] == fill.fee_asset
+                        and D(duplicate["fee_base"]) == fill.fee_base
                     )
                     if not same:
                         raise OrderInvariantError("exchange trade ID has conflicting data")
@@ -531,8 +619,8 @@ class OrderStore:
                 conn.execute(
                     text(
                         "INSERT INTO order_fills (exchange_trade_id,intent_id,quantity,"
-                        "quote_quantity,fee_quote,fee_asset) VALUES "
-                        "(:trade,:intent,:quantity,:quote,:fee,:asset)"
+                        "quote_quantity,fee_quote,fee_asset,fee_base) VALUES "
+                        "(:trade,:intent,:quantity,:quote,:fee,:asset,:fee_base)"
                     ),
                     {
                         "trade": fill.trade_id,
@@ -541,6 +629,7 @@ class OrderStore:
                         "quote": str(fill.quote_quantity),
                         "fee": str(fill.fee_quote),
                         "asset": fill.fee_asset,
+                        "fee_base": str(fill.fee_base),
                     },
                 )
 
@@ -571,6 +660,10 @@ class OrderStore:
                 state = OrderState.FILLED
             elif prior_state in {OrderState.CANCELED, OrderState.REJECTED}:
                 state = prior_state
+            elif state is OrderState.NEW and (
+                prior_state is OrderState.PARTIALLY_FILLED or confirmed_qty > ZERO
+            ):
+                state = OrderState.PARTIALLY_FILLED
             conn.execute(
                 text(
                     "UPDATE order_intents SET state=:state,exchange_order_id=:exchange,"
@@ -589,14 +682,10 @@ class OrderStore:
                     "intent": intent_id,
                 },
             )
-            if (
-                request.side == "SELL"
-                and self._available_inventory(
-                    conn, request.inventory_scope, request.symbol
+            if self._available_inventory(conn, request.inventory_scope, request.symbol) < 0:
+                raise OrderInvariantError(
+                    "confirmed fills and base fees exceed scoped bot inventory"
                 )
-                < 0
-            ):
-                raise OrderInvariantError("confirmed SELL fills exceed scoped bot inventory")
             current = self._locked_row(conn, intent_id)
             assert current is not None
             return self._record_from_row(current)
@@ -609,9 +698,25 @@ class OrderLifecycle:
         self.store = OrderStore(database_url)
         self.transport = transport
 
-    async def submit(
-        self, request: OrderRequest, filters: ExchangeFilters
-    ) -> OrderRecord:
+    @staticmethod
+    def _transport_error_reason(error: BaseException) -> str:
+        """Persist a useful category without retaining transport payloads or URLs."""
+        return type(error).__name__
+
+    @staticmethod
+    def _reject_oco(request: OrderRequest) -> None:
+        if request.order_type == "OCO":
+            raise OrderError("OCO intents must be managed by ProtectionLifecycle")
+
+    def _apply_or_mark_unknown(self, intent_id: str, update: ExchangeUpdate) -> OrderRecord:
+        try:
+            return self.store.apply_update(intent_id, update)
+        except BaseException as error:
+            self.store.mark_unknown(intent_id, self._transport_error_reason(error))
+            raise
+
+    async def submit(self, request: OrderRequest, filters: ExchangeFilters) -> OrderRecord:
+        self._reject_oco(request)
         validate_order_filters(request.quantity, request.price, filters)
         record, created = self.store.create_or_get(request)
         if not created:
@@ -621,26 +726,32 @@ class OrderLifecycle:
         try:
             update = await self.transport.submit(request)
         except (TimeoutError, RetryableTransportError) as error:
-            return self.store.mark_unknown(request.intent_id, str(error) or type(error).__name__)
+            return self.store.mark_unknown(request.intent_id, self._transport_error_reason(error))
         except BaseException as error:
-            self.store.mark_unknown(request.intent_id, str(error) or type(error).__name__)
+            self.store.mark_unknown(request.intent_id, self._transport_error_reason(error))
             raise
-        return self.store.apply_update(request.intent_id, update)
+        return self._apply_or_mark_unknown(request.intent_id, update)
 
     async def reconcile(self, intent_id: str) -> OrderRecord:
         record = self.store.get(intent_id)
-        update = await self.transport.query(record.request.client_order_id)
-        return self.store.apply_update(intent_id, update)
+        self._reject_oco(record.request)
+        try:
+            update = await self.transport.query(record.request.client_order_id)
+        except BaseException as error:
+            self.store.mark_unknown(intent_id, self._transport_error_reason(error))
+            raise
+        return self._apply_or_mark_unknown(intent_id, update)
 
     async def cancel(self, intent_id: str) -> OrderRecord:
+        self._reject_oco(self.store.get(intent_id).request)
         record, claimed = self.store.mark_cancel_requested(intent_id)
         if not claimed:
             return record
         try:
             update = await self.transport.cancel(record.request.client_order_id)
         except (TimeoutError, RetryableTransportError) as error:
-            return self.store.mark_unknown(intent_id, str(error) or type(error).__name__)
+            return self.store.mark_unknown(intent_id, self._transport_error_reason(error))
         except BaseException as error:
-            self.store.mark_unknown(intent_id, str(error) or type(error).__name__)
+            self.store.mark_unknown(intent_id, self._transport_error_reason(error))
             raise
-        return self.store.apply_update(intent_id, update)
+        return self._apply_or_mark_unknown(intent_id, update)

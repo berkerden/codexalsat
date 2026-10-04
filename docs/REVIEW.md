@@ -28,3 +28,27 @@ API canlı etkinleştirmeyi 409 ile reddeder; ortam değişkeni bu kilidi kaldı
 Canlı öncesi tamamlanmamışlar STATUS.md'de açık tutulur. Testnet transportu, borsa
 koruyucu emirleri, farklı fee varlıkları, gerçek hesap uzlaştırması ve ileri gözlem
 olmadan üretim emir güvenliği veya ekonomik avantaj iddia edilemez.
+
+
+## Testnet incelemesi — 2–5 Ekim 2026
+
+Ayrı `testnet_design_review` Astra/high bağlamı gerçek değişiklikleri ve hedefli
+testleri inceledi. Bu kapsamda P1 bildirmedi; üç P2 bulgusu düzeltildi:
+
+- Yeniden başlatmada LIMIT fiyat/tür/GTC kimliği doğrulanmıyordu. ExchangeUpdate
+  alanları ve kalıcı niyet karşılaştırması eklendi; yanlış yanıt UNKNOWN bırakır.
+- Bilinmeyen veya değerlendirilmemiş borsa filtreleri yeni emri engellemiyordu.
+  Gönderim kapısı bu kuralları reddeder; sorgulama yolunu engellemez.
+- HALT durumunda metadata kontrolü mevcut emir sorgusunu da durduruyordu.
+  Yeni emir uygunluğu metadata okuma ve kurtarma yolundan ayrıldı.
+
+Astra tekrar kontrolünde ilk ve üçüncü bulguyu doğruladı; MIN_NOTIONAL için
+aynı kapıda ek eksik buldu. Bu son kural engel listesine alındı ve yeni emir
+gönderilmezken sorgunun sürdüğünü sınayan bağımsız beklenen sonuçlu test eklendi.
+Son düzeltme ana ajan tarafından doğrulandı; Astra'nın kullanım sınırı nedeniyle
+ondan ek kapanış değerlendirmesi alınmadı. Yerel tam paket: 108 başarılı,
+36 PostgreSQL senaryosu servis olmadığı için atlandı. CI ayrıca değerlendirilir.
+
+OCO hedef/stop tek rezerv kullanır; ALL_DONE tek başına rezerv bırakmaz.
+Anahtarlı Testnet işlemi, otomatik kısmi giriş→koruma akışı ve üretim uygunluğu
+kanıtlanmış değildir. Bu sınırlı entegrasyon temeli canlı kullanım onayı değildir.
