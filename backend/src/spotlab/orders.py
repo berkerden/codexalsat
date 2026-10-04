@@ -45,6 +45,10 @@ class OrderError(ValueError):
     """Base error for invalid local order operations."""
 
 
+class SubmissionPrevented(OrderError):
+    """Transport guarantees it raised this before attempting an order mutation."""
+
+
 class OrderConflict(OrderError):
     """An identifier was reused with different immutable order data."""
 
@@ -84,28 +88,30 @@ def validate_order_filters(quantity: Decimal, price: Decimal, filters: ExchangeF
     """Validate an order against a fresh exchange metadata snapshot."""
     quantity = _decimal(quantity, "quantity")
     price = _decimal(price, "price")
-    tick = _decimal(filters.tick_size, "tick_size")
-    step = _decimal(filters.step_size, "step_size")
-    minimum = _decimal(filters.min_quantity, "min_quantity")
-    maximum = _decimal(filters.max_quantity, "max_quantity")
-    min_notional = _decimal(filters.min_notional, "min_notional")
+    tick = _decimal(filters.tick_size, "tick_size", allow_zero=True)
+    step = _decimal(filters.step_size, "step_size", allow_zero=True)
+    minimum = _decimal(filters.min_quantity, "min_quantity", allow_zero=True)
+    maximum = _decimal(filters.max_quantity, "max_quantity", allow_zero=True)
+    min_notional = _decimal(filters.min_notional, "min_notional", allow_zero=True)
     max_notional = (
-        None if filters.max_notional is None else _decimal(filters.max_notional, "max_notional")
+        None
+        if filters.max_notional is None
+        else _decimal(filters.max_notional, "max_notional", allow_zero=True)
     )
-    if minimum > maximum:
+    if maximum and minimum > maximum:
         raise OrderError("min_quantity exceeds max_quantity")
-    if max_notional is not None and min_notional > max_notional:
+    if max_notional and min_notional > max_notional:
         raise OrderError("min_notional exceeds max_notional")
-    if quantity < minimum or quantity > maximum:
+    if quantity < minimum or (maximum and quantity > maximum):
         raise OrderError("quantity is outside exchange limits")
-    if quantity % step != 0:
+    if step and quantity % step != 0:
         raise OrderError("quantity is not aligned to step_size")
-    if price % tick != 0:
+    if tick and price % tick != 0:
         raise OrderError("price is not aligned to tick_size")
     notional = quantity * price
     if notional < min_notional:
         raise OrderError("notional is below min_notional")
-    if max_notional is not None and notional > max_notional:
+    if max_notional and notional > max_notional:
         raise OrderError("notional exceeds max_notional")
 
 
@@ -363,54 +369,61 @@ class OrderStore:
     def create_or_get(self, request: OrderRequest) -> tuple[OrderRecord, bool]:
         request.validate()
         with self._writer() as conn:
-            row = self._locked_row(conn, request.intent_id)
-            if row is not None:
-                existing = self._record_from_row(row)
-                if not self._same_request(existing.request, request):
-                    raise OrderConflict("intent_id was reused with different order data")
-                return existing, False
-            other = conn.execute(
-                text("SELECT intent_id FROM order_intents WHERE client_order_id=:client"),
-                {"client": request.client_order_id},
-            ).scalar_one_or_none()
-            if other is not None:
-                raise OrderConflict("client_order_id is already assigned to another intent")
-            if request.side == "SELL":
-                available = self._available_inventory(conn, request.inventory_scope, request.symbol)
-                if request.quantity > available:
-                    raise InsufficientInventory(
-                        f"SELL quantity {request.quantity} exceeds available {available}"
-                    )
-            now = self._millis()
-            conn.execute(
-                text(
-                    "INSERT INTO order_intents (intent_id,client_order_id,symbol,side,"
-                    "order_type,quantity,price,quote_asset,inventory_scope,state,"
-                    "exchange_order_id,confirmed_quantity,confirmed_quote_quantity,"
-                    "confirmed_fee_quote,exchange_cumulative_quantity,cancel_requested,"
-                    "error,created_at,updated_at) VALUES (:intent,:client,:symbol,:side,"
-                    ":order_type,:quantity,:price,:quote,:scope,:state,NULL,'0','0','0',"
-                    "'0',0,NULL,:at,:at)"
-                ),
-                {
-                    "intent": request.intent_id,
-                    "client": request.client_order_id,
-                    "symbol": request.symbol,
-                    "side": request.side,
-                    "order_type": request.order_type,
-                    "quantity": str(request.quantity),
-                    "price": str(request.price),
-                    "quote": request.quote_asset,
-                    "scope": request.inventory_scope,
-                    "state": OrderState.INTENDED.value,
-                    "at": now,
-                },
-            )
-            row = self._locked_row(conn, request.intent_id)
-            assert row is not None
-            return self._record_from_row(row), True
+            return self._create_or_get(conn, request)
 
-    def _available_inventory(self, conn: Connection, scope: str, symbol: str) -> Decimal:
+    def _create_or_get(self, conn: Connection, request: OrderRequest) -> tuple[OrderRecord, bool]:
+        """Compose intent creation inside an existing serialized writer transaction."""
+        request.validate()
+        row = self._locked_row(conn, request.intent_id)
+        if row is not None:
+            existing = self._record_from_row(row)
+            if not self._same_request(existing.request, request):
+                raise OrderConflict("intent_id was reused with different order data")
+            return existing, False
+        other = conn.execute(
+            text("SELECT intent_id FROM order_intents WHERE client_order_id=:client"),
+            {"client": request.client_order_id},
+        ).scalar_one_or_none()
+        if other is not None:
+            raise OrderConflict("client_order_id is already assigned to another intent")
+        if request.side == "SELL":
+            available = self._available_inventory(conn, request.inventory_scope, request.symbol)
+            if request.quantity > available:
+                raise InsufficientInventory(
+                    f"SELL quantity {request.quantity} exceeds available {available}"
+                )
+        now = self._millis()
+        conn.execute(
+            text(
+                "INSERT INTO order_intents (intent_id,client_order_id,symbol,side,"
+                "order_type,quantity,price,quote_asset,inventory_scope,state,"
+                "exchange_order_id,confirmed_quantity,confirmed_quote_quantity,"
+                "confirmed_fee_quote,exchange_cumulative_quantity,cancel_requested,"
+                "error,created_at,updated_at) VALUES (:intent,:client,:symbol,:side,"
+                ":order_type,:quantity,:price,:quote,:scope,:state,NULL,'0','0','0',"
+                "'0',0,NULL,:at,:at)"
+            ),
+            {
+                "intent": request.intent_id,
+                "client": request.client_order_id,
+                "symbol": request.symbol,
+                "side": request.side,
+                "order_type": request.order_type,
+                "quantity": str(request.quantity),
+                "price": str(request.price),
+                "quote": request.quote_asset,
+                "scope": request.inventory_scope,
+                "state": OrderState.INTENDED.value,
+                "at": now,
+            },
+        )
+        row = self._locked_row(conn, request.intent_id)
+        assert row is not None
+        return self._record_from_row(row), True
+
+    def _available_inventory(
+        self, conn: Connection, scope: str, symbol: str, *, include_reservations: bool = True
+    ) -> Decimal:
         rows = conn.execute(
             text(
                 "SELECT intent_id,side,state,quantity,confirmed_quantity,"
@@ -449,7 +462,7 @@ class OrderStore:
                     # exchange-reported executed remainder unavailable until
                     # its confirmed fills arrive.
                     reserved += max(ZERO, D(row["exchange_cumulative_quantity"]) - filled)
-        return confirmed - reserved
+        return confirmed - reserved if include_reservations else confirmed
 
     def available_inventory(self, inventory_scope: str, symbol: str) -> Decimal:
         """Return unreserved, confirmed bot inventory for a scope and symbol."""
@@ -457,6 +470,13 @@ class OrderStore:
             raise OrderError("inventory_scope and symbol are required")
         with self._writer() as conn:
             return self._available_inventory(conn, inventory_scope, symbol)
+
+    def owned_inventory(self, inventory_scope: str, symbol: str) -> Decimal:
+        """Confirmed net base inventory, including quantities reserved for exits."""
+        with self._writer() as conn:
+            return self._available_inventory(
+                conn, inventory_scope, symbol, include_reservations=False
+            )
 
     def claim_submission(self, intent_id: str) -> bool:
         with self._writer() as conn:
@@ -476,6 +496,29 @@ class OrderStore:
                 },
             )
             return True
+
+    def reject_unsent(self, intent_id: str) -> OrderRecord:
+        """Only for a transport's explicit guarantee that no POST was attempted."""
+        with self._writer() as conn:
+            row = self._locked_row(conn, intent_id)
+            if row is None:
+                raise KeyError(intent_id)
+            if (
+                row["exchange_order_id"] is not None
+                or D(row["confirmed_quantity"]) != 0
+                or D(row["exchange_cumulative_quantity"]) != 0
+            ):
+                raise OrderInvariantError("cannot reject an intent with exchange evidence")
+            conn.execute(
+                text(
+                    "UPDATE order_intents SET state='REJECTED',error='SubmissionPrevented',"
+                    "updated_at=:at WHERE intent_id=:id"
+                ),
+                {"id": intent_id, "at": self._millis()},
+            )
+            current = self._locked_row(conn, intent_id)
+            assert current is not None
+            return self._record_from_row(current)
 
     def mark_unknown(self, intent_id: str, reason: str) -> OrderRecord:
         with self._writer() as conn:
@@ -719,12 +762,14 @@ class OrderLifecycle:
         self._reject_oco(request)
         validate_order_filters(request.quantity, request.price, filters)
         record, created = self.store.create_or_get(request)
-        if not created:
+        if not created and record.state is not OrderState.INTENDED:
             return record
         if not self.store.claim_submission(request.intent_id):
             return self.store.get(request.intent_id)
         try:
             update = await self.transport.submit(request)
+        except SubmissionPrevented:
+            return self.store.reject_unsent(request.intent_id)
         except (TimeoutError, RetryableTransportError) as error:
             return self.store.mark_unknown(request.intent_id, self._transport_error_reason(error))
         except BaseException as error:

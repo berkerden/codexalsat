@@ -739,3 +739,29 @@ def test_concurrent_creation_has_one_durable_intent(database_url: str) -> None:
         results = list(pool.map(lambda _: store.create_or_get(request), range(12)))
     assert sum(created for _, created in results) == 1
     assert all(record.request == request for record, _ in results)
+
+
+@pytest.mark.asyncio
+async def test_persisted_but_unsent_intent_can_be_claimed_once(database_url: str) -> None:
+    transport = FakeTransport()
+    request = order()
+    lifecycle = OrderLifecycle(database_url, transport)
+    lifecycle.store.create_or_get(request)
+    transport.submit_result = update(request, OrderState.NEW, "0")
+    results = await asyncio.gather(
+        lifecycle.submit(request, filters()), lifecycle.submit(request, filters())
+    )
+    assert all(result.state in {OrderState.SUBMITTING, OrderState.NEW} for result in results)
+    assert transport.submit_calls == 1
+
+
+def test_zero_disabled_filter_rules_and_owned_inventory(database_url: str) -> None:
+    disabled = ExchangeFilters(D(0), D(0), D(0), D(0), D(0), D(0))
+    validate_order_filters(D("0.012345"), D("0.12345"), disabled)
+    store = OrderStore(database_url)
+    request = order(quantity="1")
+    store.create_or_get(request)
+    store.apply_update(request.intent_id, update(request, OrderState.FILLED, "1", (fill("own"),)))
+    store.create_or_get(order("sell", "SELL", "1"))
+    assert store.available_inventory("run-1", "BTCUSDT") == 0
+    assert store.owned_inventory("run-1", "BTCUSDT") == 1
