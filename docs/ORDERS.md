@@ -1,7 +1,8 @@
 # Durable order-intent core
 
-`spotlab.orders` is bounded groundwork for a future testnet adapter. It does not contain an
-HTTP/WebSocket client, credentials, production routing, or any code that can place a real order.
+`spotlab.orders` is the durable ledger shared by the isolated Testnet transport and protective
+OCO lifecycle. The ledger itself contains no HTTP client or credentials. The application/paper UI
+does not route orders through these adapters. See [Testnet scope and gates](TESTNET.md).
 
 The caller supplies an `OrderRequest`, a current `ExchangeFilters` snapshot, and an implementation
 of the async `OrderTransport` protocol. `OrderLifecycle.submit()` validates tick size, lot size,
@@ -20,13 +21,13 @@ the durable client-order ID and applies that response.
 
 The lifecycle states are `INTENDED`, `SUBMITTING`, `UNKNOWN`, `NEW`, `PARTIALLY_FILLED`, `FILLED`,
 `CANCELED`, and `REJECTED`. Confirmed fills are deduplicated by exchange trade ID and store only
-finite `Decimal` base quantity, quote quantity, and a fee explicitly denominated in the order's
-quote asset. Reused trade IDs with conflicting values, mismatched order IDs, impossible cumulative
-quantities, incomplete `FILLED` events, and non-quote fees are rejected transactionally. Stale or
+finite `Decimal` base quantity, quote quantity, quote-valued commission and base commission. Reused trade IDs with conflicting values, mismatched order IDs, impossible cumulative
+quantities, incomplete `FILLED` events, and third-asset fees are rejected transactionally. Base fees are valued at the fill's effective
+quote/base price and deducted from scoped inventory once; original gross fills remain unchanged. Stale or
 out-of-order updates cannot reduce confirmed totals. A fill received after `CANCELED` is still
 accounted; the state remains canceled unless confirmed fills reach the full intended quantity.
 
-Inventory is isolated by the pair `(inventory_scope, symbol)`. Only confirmed BUY fills create
+Inventory is isolated by the pair `(inventory_scope, symbol)`. Only confirmed BUY fills minus base-asset commission create
 inventory. A SELL intent reserves its full unfilled amount, and creation fails if confirmed
 inventory minus existing SELL fills and reservations is insufficient. A canceled order continues
 to reserve any exchange-reported cumulative quantity whose trade details have not arrived yet.
@@ -51,9 +52,9 @@ requires a compact stable client ID.
 ## Remaining live blockers
 
 There is no evidence of testnet execution in this repository, and none is claimed. Before any live
-use, a separate adapter needs credential handling, signed requests, venue-specific error mapping,
-rate-limit behavior, startup reconciliation across all open orders and trades, and testnet evidence
-for disconnects and exchange maintenance. Production use also requires explicit capital/risk
+use, the isolated adapter still needs complete applicable-filter validation, automatic entry/protection
+orchestration, startup reconciliation across all open orders and trades, and authenticated testnet
+evidence for disconnects and exchange maintenance. Production use also requires explicit capital/risk
 authorization, independent review, monitoring and emergency controls. The required 30-day forward
 observation cannot be completed within this implementation task and remains an external time-based
 blocker.

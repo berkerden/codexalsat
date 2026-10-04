@@ -98,10 +98,12 @@ stop fiyatı iddia etmez. `closed_trade_equity_drawdown` yalnız kapanmış işl
 serisinin düşüşüdür; gerçek pozisyon içi portföy maksimum düşüşü henüz raporlanmaz.
 Paper dolumları kotasyon miktarıyla sınırlanan simülasyonlardır; borsa kuyruğu değildir.
 
-Canlı öncesinde gerçek testnet emir/koruma adaptörü, hesaba özgü ücretler ve BNB/base
+Testnet imzalama, emir sorgulama ve OCO kayıt çekirdeği ayrı modülde hazırdır;
+[yerel kurulum ve sınırlar](docs/TESTNET.md). Panelden testnet emri gönderilmez.
+Canlı öncesinde tam filtre/giriş-koruma entegrasyonu, gerçek testnet doğrulaması, BNB
 komisyon muhasebesi, 30 takvim günü ileri paper gözlemi, yeterli etkin örnek ve
 bağımsız operasyonel onay gerekir. Yazılım testleri kârlılık kanıtı değildir.
 
 [SPEC](SPEC.md) · [Durum](STATUS.md) · [Veri](docs/DATA.md) ·
-[Araştırma](docs/RESEARCH.md) · [Emir çekirdeği](docs/ORDERS.md) ·
+[Araştırma](docs/RESEARCH.md) · [Emir çekirdeği](docs/ORDERS.md) · [Testnet](docs/TESTNET.md) ·
 [Operasyon](docs/OPERATIONS.md) · [PR #3](https://github.com/berkerden/codexalsat/pull/3)
