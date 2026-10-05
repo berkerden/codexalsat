@@ -98,9 +98,10 @@ stop fiyatı iddia etmez. `closed_trade_equity_drawdown` yalnız kapanmış işl
 serisinin düşüşüdür; gerçek pozisyon içi portföy maksimum düşüşü henüz raporlanmaz.
 Paper dolumları kotasyon miktarıyla sınırlanan simülasyonlardır; borsa kuyruğu değildir.
 
-Testnet imzalama, emir sorgulama ve OCO kayıt çekirdeği ayrı modülde hazırdır;
+Testnet imzalama, borsa kuralları, emir sorgulama ve tek alış→OCO akışı ayrı modüldedir;
 [yerel kurulum ve sınırlar](docs/TESTNET.md). Panelden testnet emri gönderilmez.
-Canlı öncesinde tam filtre/giriş-koruma entegrasyonu, gerçek testnet doğrulaması, BNB
+Süreli testnet denemesi ayrı komut satırında açık onay ister; stratejiyle yeni işlem açmaz.
+Canlı öncesinde gerçek testnet doğrulaması, kesintisiz giriş/koruma yönetimi, BNB
 komisyon muhasebesi, 30 takvim günü ileri paper gözlemi, yeterli etkin örnek ve
 bağımsız operasyonel onay gerekir. Yazılım testleri kârlılık kanıtı değildir.
 

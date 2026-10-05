@@ -9,7 +9,10 @@ of the async `OrderTransport` protocol. `OrderLifecycle.submit()` validates tick
 quantity, and min/max notional using finite positive `Decimal` values. It then writes an `INTENDED`
 row to the application's SQLAlchemy database, atomically claims it as `SUBMITTING`, and only then
 calls the transport. Intent IDs and exchange client-order IDs are independently unique. Repeating
-the same intent returns its stored record and never sends it again.
+an already-claimed intent returns its stored record and never sends it again. An INTENDED
+record whose submission was never claimed may be atomically claimed once after recovery.
+A transport can explicitly report SubmissionPrevented only before any network mutation; the
+core then persists a local REJECTED record, which requires no exchange query.
 
 SQLite writers use `BEGIN IMMEDIATE`; PostgreSQL writers take one transaction-scoped advisory lock
 before taking intent `FOR UPDATE` locks. The global writer lock is required because two new SELL
@@ -52,8 +55,8 @@ requires a compact stable client ID.
 ## Remaining live blockers
 
 There is no evidence of testnet execution in this repository, and none is claimed. Before any live
-use, the isolated adapter still needs complete applicable-filter validation, automatic entry/protection
-orchestration, startup reconciliation across all open orders and trades, and authenticated testnet
+use, the isolated adapter still needs broader unattended entry/protection orchestration, startup
+reconciliation across all open orders and trades, and authenticated testnet
 evidence for disconnects and exchange maintenance. Production use also requires explicit capital/risk
 authorization, independent review, monitoring and emergency controls. The required 30-day forward
 observation cannot be completed within this implementation task and remains an external time-based

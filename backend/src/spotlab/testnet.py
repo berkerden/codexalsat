@@ -13,7 +13,7 @@ import os
 import re
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
 from typing import Any, Final, Literal, cast
@@ -31,55 +31,40 @@ from spotlab.orders import (
     OrderRequest,
     OrderState,
     RetryableTransportError,
-    validate_order_filters,
+    SubmissionPrevented,
+)
+from spotlab.venue_filters import (
+    KNOWN_ASSET_FILTERS,
+    KNOWN_EXCHANGE_FILTERS,
+    KNOWN_SYMBOL_FILTERS,
+    VenueBalance,
+    VenueFilter,
+    VenueOpenOrder,
+    VenueSnapshot,
+    validate_submission,
 )
 
 TESTNET_BASE_URL: Final = "https://testnet.binance.vision"
 SUPPORTED_SYMBOLS: Final = frozenset({"BTCUSDT", "SOLUSDT"})
 CLIENT_ORDER_ID_RE: Final = re.compile(r"^[A-Za-z0-9._:/-]{1,36}$")
 RECV_WINDOW_MS: Final = 5_000
+MAX_PREFLIGHT_AGE_MS: Final = 5_000
+MAX_ENTRY_CLOCK_DRIFT_MS: Final = 1_000
 TRADE_PAGE_SIZE: Final = 1_000
 _AMBIGUOUS_CODES: Final = frozenset({-1006, -1007})
 _METHODS: Final = frozenset({"GET", "POST", "DELETE"})
-_KNOWN_FILTER_TYPES: Final = frozenset(
-    {
-        "PRICE_FILTER",
-        "LOT_SIZE",
-        "ICEBERG_PARTS",
-        "MARKET_LOT_SIZE",
-        "TRAILING_DELTA",
-        "PERCENT_PRICE_BY_SIDE",
-        "NOTIONAL",
-        "MAX_NUM_ORDERS",
-        "MAX_NUM_ORDER_LISTS",
-        "MAX_NUM_ALGO_ORDERS",
-        "MAX_NUM_ORDER_AMENDS",
-        "PERCENT_PRICE",
-        "MIN_NOTIONAL",
-        "MAX_POSITION",
-    }
-)
-_UNEVALUATED_SUBMISSION_FILTERS: Final = frozenset(
-    {
-        "MIN_NOTIONAL",
-        "MARKET_LOT_SIZE",
-        "PERCENT_PRICE_BY_SIDE",
-        "MAX_NUM_ORDERS",
-        "MAX_NUM_ORDER_LISTS",
-        "MAX_NUM_ALGO_ORDERS",
-        "MAX_NUM_ORDER_AMENDS",
-        "PERCENT_PRICE",
-        "MAX_POSITION",
-    }
-)
 _ALLOWED_ENDPOINTS: Final = frozenset(
     {
         ("GET", "/api/v3/time"),
         ("GET", "/api/v3/exchangeInfo"),
         ("GET", "/api/v3/ticker/bookTicker"),
         ("GET", "/api/v3/ticker/price"),
+        ("GET", "/api/v3/avgPrice"),
+        ("GET", "/api/v3/referencePrice"),
         ("GET", "/api/v3/account"),
         ("GET", "/api/v3/account/commission"),
+        ("GET", "/api/v3/openOrders"),
+        ("GET", "/api/v3/myFilters"),
         ("GET", "/api/v3/order"),
         ("GET", "/api/v3/myTrades"),
         ("GET", "/api/v3/orderList"),
@@ -112,9 +97,7 @@ class TestnetCredentials(BaseModel):
         api_key = os.getenv("SPOTLAB_TESTNET_API_KEY")
         secret = os.getenv("SPOTLAB_TESTNET_API_SECRET")
         if api_key is None or secret is None:
-            raise ValueError(
-                "SPOTLAB_TESTNET_API_KEY and SPOTLAB_TESTNET_API_SECRET are required"
-            )
+            raise ValueError("SPOTLAB_TESTNET_API_KEY and SPOTLAB_TESTNET_API_SECRET are required")
         return cls.model_validate({"api_key": api_key, "secret": secret})
 
 
@@ -140,6 +123,10 @@ class SymbolMetadata:
     order_types: tuple[str, ...]
     oco_allowed: bool
     filter_types: tuple[str, ...]
+    symbol_filters: tuple[VenueFilter, ...]
+    exchange_filters: tuple[VenueFilter, ...]
+    asset_filters: tuple[VenueFilter, ...]
+    observed_at_ms: int
 
 
 @dataclass(frozen=True)
@@ -166,10 +153,19 @@ class CommissionRates:
 
 
 @dataclass(frozen=True)
+class CommissionDiscount:
+    enabled_for_account: bool
+    enabled_for_symbol: bool
+    asset: str
+    rate: Decimal
+
+
+@dataclass(frozen=True)
 class AccountSnapshot:
     can_trade: bool
     balances: tuple[AssetBalance, ...]
     standard_commission: CommissionRates
+    discount: CommissionDiscount | None
     observed_at_ms: int
 
     def balance(self, asset: str) -> AssetBalance:
@@ -230,18 +226,54 @@ def _mapping(value: object, name: str) -> dict[str, Any]:
     return cast(dict[str, Any], value)
 
 
+def _venue_filter(value: object, name: str) -> VenueFilter:
+    data = _mapping(value, name)
+    filter_type = data.get("filterType")
+    if not isinstance(filter_type, str) or not filter_type:
+        raise OrderInvariantError(f"testnet {name} type is malformed")
+    values: list[tuple[str, str | int | bool]] = []
+    for key, item in data.items():
+        if key == "filterType":
+            continue
+        if not isinstance(item, (str, int, bool)):
+            raise OrderInvariantError(f"testnet {name} field is malformed")
+        values.append((key, item))
+    return VenueFilter(filter_type, tuple(sorted(values)))
+
+
+def _merge_filters(
+    original: tuple[VenueFilter, ...], extra: tuple[VenueFilter, ...], name: str
+) -> tuple[VenueFilter, ...]:
+    merged = {item.filter_type: item for item in original}
+    for item in extra:
+        current = merged.get(item.filter_type)
+        if current is not None and current != item:
+            raise OrderInvariantError(f"testnet {name} filter snapshots disagree")
+        merged[item.filter_type] = item
+    return tuple(merged.values())
+
+
+def _require_unique_filters(filters: tuple[VenueFilter, ...], name: str) -> tuple[VenueFilter, ...]:
+    kinds = [item.filter_type for item in filters]
+    if len(kinds) != len(set(kinds)):
+        raise OrderInvariantError(f"testnet {name} filters are duplicated")
+    return filters
+
+
 def validate_submission_metadata(metadata: SymbolMetadata) -> None:
-    """Fail closed when fresh rules cannot all be evaluated for a mutation."""
+    """Validate the static portion of a submission metadata snapshot."""
 
     if metadata.status != "TRADING":
         raise OrderError("bound testnet symbol is not trading")
     if "LIMIT" not in metadata.order_types:
         raise OrderError("bound testnet symbol does not allow LIMIT orders")
-    unknown = set(metadata.filter_types) - _KNOWN_FILTER_TYPES
+    unknown = set(metadata.filter_types) - KNOWN_SYMBOL_FILTERS
     if unknown:
         raise OrderError("exchangeInfo contains unsupported symbol filters")
-    if set(metadata.filter_types) & _UNEVALUATED_SUBMISSION_FILTERS:
-        raise OrderError("exchangeInfo contains filters not evaluated for safe submission")
+    if {item.filter_type for item in metadata.exchange_filters} - KNOWN_EXCHANGE_FILTERS:
+        raise OrderError("exchangeInfo contains unsupported exchange filters")
+    if {item.filter_type for item in metadata.asset_filters} - KNOWN_ASSET_FILTERS:
+        raise OrderError("myFilters contains unsupported asset filters")
 
 
 class BinanceTestnetTransport:
@@ -451,6 +483,9 @@ class BinanceTestnetTransport:
         filters = symbol.get("filters")
         if not isinstance(filters, list):
             raise OrderInvariantError("exchangeInfo filters are malformed")
+        symbol_filters = tuple(
+            _venue_filter(item, "exchangeInfo symbol filter") for item in filters
+        )
         indexed: dict[str, dict[str, Any]] = {}
         for item in filters:
             current = _mapping(item, "exchangeInfo filter")
@@ -463,20 +498,29 @@ class BinanceTestnetTransport:
         try:
             price_filter = indexed["PRICE_FILTER"]
             lot_filter = indexed["LOT_SIZE"]
-            notional_filter = indexed["NOTIONAL"]
         except KeyError as error:
             raise OrderInvariantError(
-                "exchangeInfo requires PRICE_FILTER, LOT_SIZE, and NOTIONAL filters"
+                "exchangeInfo requires PRICE_FILTER and LOT_SIZE filters"
             ) from error
+        notional_filter = indexed.get("NOTIONAL", indexed.get("MIN_NOTIONAL"))
+        if notional_filter is None:
+            raise OrderInvariantError("exchangeInfo requires a notional filter")
+        raw_exchange_filters = data.get("exchangeFilters", [])
+        if not isinstance(raw_exchange_filters, list):
+            raise OrderInvariantError("exchangeInfo exchange filters are malformed")
+        exchange_filters = _require_unique_filters(
+            tuple(
+                _venue_filter(item, "exchangeInfo exchange filter") for item in raw_exchange_filters
+            ),
+            "exchangeInfo exchange",
+        )
         min_price = _response_decimal(price_filter.get("minPrice"), "minimum price")
-        max_price = _response_decimal(
-            price_filter.get("maxPrice"), "maximum price", allow_zero=False
-        )
-        minimum_notional = _response_decimal(
-            notional_filter.get("minNotional"), "minimum notional", allow_zero=False
-        )
-        raw_max_notional = _response_decimal(
-            notional_filter.get("maxNotional"), "maximum notional"
+        max_price = _response_decimal(price_filter.get("maxPrice"), "maximum price")
+        minimum_notional = _response_decimal(notional_filter.get("minNotional"), "minimum notional")
+        raw_max_notional = (
+            _response_decimal(notional_filter.get("maxNotional"), "maximum notional")
+            if "maxNotional" in notional_filter
+            else Decimal(0)
         )
         metadata = SymbolMetadata(
             symbol=self.symbol,
@@ -485,18 +529,10 @@ class BinanceTestnetTransport:
             status=cast(str, status),
             server_time_ms=server_time,
             filters=ExchangeFilters(
-                tick_size=_response_decimal(
-                    price_filter.get("tickSize"), "tick size", allow_zero=False
-                ),
-                step_size=_response_decimal(
-                    lot_filter.get("stepSize"), "step size", allow_zero=False
-                ),
-                min_quantity=_response_decimal(
-                    lot_filter.get("minQty"), "minimum quantity", allow_zero=False
-                ),
-                max_quantity=_response_decimal(
-                    lot_filter.get("maxQty"), "maximum quantity", allow_zero=False
-                ),
+                tick_size=_response_decimal(price_filter.get("tickSize"), "tick size"),
+                step_size=_response_decimal(lot_filter.get("stepSize"), "step size"),
+                min_quantity=_response_decimal(lot_filter.get("minQty"), "minimum quantity"),
+                max_quantity=_response_decimal(lot_filter.get("maxQty"), "maximum quantity"),
                 min_notional=minimum_notional,
                 max_notional=raw_max_notional or None,
             ),
@@ -505,8 +541,12 @@ class BinanceTestnetTransport:
             order_types=order_types,
             oco_allowed=oco_allowed,
             filter_types=tuple(indexed),
+            symbol_filters=symbol_filters,
+            exchange_filters=exchange_filters,
+            asset_filters=(),
+            observed_at_ms=self._clock_ms(),
         )
-        if metadata.min_price > metadata.max_price:
+        if metadata.min_price and metadata.max_price and metadata.min_price > metadata.max_price:
             raise OrderInvariantError("exchangeInfo price bounds are inverted")
         self._metadata = metadata
         return metadata
@@ -573,40 +613,284 @@ class BinanceTestnetTransport:
             buyer=_response_decimal(standard.get("buyer"), "buyer commission"),
             seller=_response_decimal(standard.get("seller"), "seller commission"),
         )
+        raw_discount = commission.get("discount")
+        discount: CommissionDiscount | None = None
+        if raw_discount is not None:
+            discount_data = _mapping(raw_discount, "commission discount")
+            enabled_for_account = discount_data.get("enabledForAccount")
+            enabled_for_symbol = discount_data.get("enabledForSymbol")
+            discount_asset = discount_data.get("discountAsset")
+            if not isinstance(enabled_for_account, bool) or not isinstance(
+                enabled_for_symbol, bool
+            ):
+                raise OrderInvariantError("commission discount enablement is malformed")
+            if not isinstance(discount_asset, str) or not discount_asset:
+                raise OrderInvariantError("commission discount asset is malformed")
+            discount = CommissionDiscount(
+                enabled_for_account,
+                enabled_for_symbol,
+                discount_asset,
+                _response_decimal(discount_data.get("discount"), "commission discount rate"),
+            )
         ordered = tuple(
             balances.get(asset, AssetBalance(asset, Decimal(0), Decimal(0)))
             for asset in (metadata.base_asset, metadata.quote_asset)
         )
-        return AccountSnapshot(can_trade, ordered, rates, self._clock_ms())
+        return AccountSnapshot(can_trade, ordered, rates, discount, self._clock_ms())
+
+    async def _relevant_filters(self, metadata: SymbolMetadata) -> SymbolMetadata:
+        raw = await self.request("GET", "/api/v3/myFilters", {"symbol": self.symbol})
+        data = _mapping(raw, "myFilters response")
+        parsed: dict[str, tuple[VenueFilter, ...]] = {}
+        for key in ("symbolFilters", "exchangeFilters", "assetFilters"):
+            values = data.get(key)
+            if not isinstance(values, list):
+                raise OrderInvariantError(f"myFilters {key} is malformed")
+            parsed[key] = _require_unique_filters(
+                tuple(_venue_filter(item, f"myFilters {key}") for item in values),
+                f"myFilters {key}",
+            )
+        return replace(
+            metadata,
+            symbol_filters=_merge_filters(
+                metadata.symbol_filters, parsed["symbolFilters"], "symbol"
+            ),
+            exchange_filters=_merge_filters(
+                metadata.exchange_filters, parsed["exchangeFilters"], "exchange"
+            ),
+            asset_filters=_merge_filters(metadata.asset_filters, parsed["assetFilters"], "asset"),
+        )
+
+    async def _open_orders(self) -> tuple[VenueOpenOrder, ...]:
+        raw = await self.request("GET", "/api/v3/openOrders")
+        if not isinstance(raw, list):
+            raise OrderInvariantError("openOrders response must be a list")
+        orders: list[VenueOpenOrder] = []
+        for value in raw:
+            item = _mapping(value, "open order")
+            symbol = item.get("symbol")
+            side = item.get("side")
+            order_type = item.get("type")
+            order_list_id = item.get("orderListId")
+            if not isinstance(symbol, str) or not symbol:
+                raise OrderInvariantError("open order symbol is malformed")
+            if side not in {"BUY", "SELL"}:
+                raise OrderInvariantError("open order side is malformed")
+            if not isinstance(order_type, str) or not order_type:
+                raise OrderInvariantError("open order type is malformed")
+            if isinstance(order_list_id, bool) or not isinstance(order_list_id, int):
+                raise OrderInvariantError("open order list ID is malformed")
+            original = _response_decimal(
+                item.get("origQty"), "open order original quantity", allow_zero=False
+            )
+            executed = _response_decimal(item.get("executedQty"), "open order executed quantity")
+            if executed > original:
+                raise OrderInvariantError("open order executed quantity exceeds original")
+            orders.append(
+                VenueOpenOrder(
+                    symbol,
+                    cast(str, side),
+                    order_type,
+                    original,
+                    executed,
+                    order_list_id,
+                )
+            )
+        return tuple(orders)
+
+    async def _dynamic_prices(
+        self, metadata: SymbolMetadata, order: OrderRequest
+    ) -> tuple[Decimal | None, Decimal | None, int | None, Decimal | None]:
+        dynamic = [
+            rule
+            for rule in metadata.symbol_filters
+            if rule.filter_type in {"PERCENT_PRICE", "PERCENT_PRICE_BY_SIDE"}
+        ]
+        if order.order_type == "OCO":
+            for rule in metadata.symbol_filters:
+                if rule.filter_type == "MIN_NOTIONAL":
+                    flag = rule.get("applyToMarket")
+                elif rule.filter_type == "NOTIONAL":
+                    apply_min = rule.get("applyMinToMarket")
+                    apply_max = rule.get("applyMaxToMarket")
+                    if not isinstance(apply_min, bool) or not isinstance(apply_max, bool):
+                        raise OrderInvariantError("NOTIONAL market flags are malformed")
+                    flag = apply_min or apply_max
+                else:
+                    continue
+                if not isinstance(flag, bool):
+                    raise OrderInvariantError(f"{rule.filter_type} market flag is malformed")
+                if flag:
+                    dynamic.append(rule)
+        needs_last = order.order_type == "OCO"
+        if not dynamic and not needs_last:
+            return None, None, None, None
+
+        reference: Decimal | None = None
+        if dynamic:
+            try:
+                raw_reference = await self.request(
+                    "GET", "/api/v3/referencePrice", {"symbol": self.symbol}, signed=False
+                )
+            except TestnetAPIError as error:
+                if error.code != -2043:
+                    raise
+            else:
+                reference_data = _mapping(raw_reference, "referencePrice response")
+                if reference_data.get("symbol") != self.symbol:
+                    raise OrderInvariantError("referencePrice symbol does not match transport")
+                _response_int(reference_data.get("timestamp"), "referencePrice timestamp")
+                raw_price = reference_data.get("referencePrice")
+                if raw_price is not None:
+                    reference = _response_decimal(raw_price, "reference price", allow_zero=False)
+
+        mins: set[int] = set()
+        if reference is None:
+            for rule in dynamic:
+                raw_mins = rule.get("avgPriceMins")
+                if isinstance(raw_mins, bool) or not isinstance(raw_mins, int) or raw_mins < 0:
+                    raise OrderInvariantError("dynamic filter avgPriceMins is malformed")
+                mins.add(raw_mins)
+        average: Decimal | None = None
+        average_mins: int | None = None
+        last: Decimal | None = None
+        if any(value > 0 for value in mins):
+            raw_average = await self.request(
+                "GET", "/api/v3/avgPrice", {"symbol": self.symbol}, signed=False
+            )
+            average_data = _mapping(raw_average, "avgPrice response")
+            average = _response_decimal(
+                average_data.get("price"), "average price", allow_zero=False
+            )
+            average_mins = _response_int(average_data.get("mins"), "average price mins")
+        if 0 in mins or needs_last:
+            raw_last = await self.request(
+                "GET", "/api/v3/ticker/price", {"symbol": self.symbol}, signed=False
+            )
+            last_data = _mapping(raw_last, "last-price response")
+            if last_data.get("symbol") != self.symbol:
+                raise OrderInvariantError("last-price symbol mismatch")
+            last = _response_decimal(last_data.get("price"), "last price", allow_zero=False)
+        return reference, average, average_mins, last
+
+    async def prepare_submission(
+        self,
+        order: OrderRequest,
+        *,
+        stop_price: Decimal | None = None,
+        reserve_protection: bool = False,
+        protection_target: Decimal | None = None,
+        protection_stop: Decimal | None = None,
+    ) -> SymbolMetadata:
+        """Fetch a fresh complete snapshot and fail before any order mutation."""
+
+        order.validate()
+        if (protection_target is None) != (protection_stop is None):
+            raise OrderError("future protection requires both target and stop")
+        future = None
+        if protection_target is not None:
+            if order.side != "BUY" or order.order_type != "LIMIT" or not reserve_protection:
+                raise OrderError("future protection preflight requires a capacity-reserved BUY")
+            future = replace(order, side="SELL", order_type="OCO", price=protection_target)
+        if order.symbol != self.symbol:
+            raise OrderError("order symbol does not match transport symbol")
+        self._validate_client_id(order.client_order_id)
+        metadata = await self.exchange_info()
+        validate_submission_metadata(metadata)
+        metadata = await self._relevant_filters(metadata)
+        validate_submission_metadata(metadata)
+        snapshot = await self.account_snapshot()
+        if order.side == "BUY":
+            if snapshot.discount is None:
+                raise OrderInvariantError("commission discount metadata is missing")
+            if (
+                snapshot.discount.enabled_for_account
+                and snapshot.discount.enabled_for_symbol
+                and snapshot.discount.asset not in {metadata.base_asset, metadata.quote_asset}
+            ):
+                raise OrderError("third-asset commission discount is unsafe for new entry")
+        open_orders = await self._open_orders()
+        reference, average, average_mins, last = await self._dynamic_prices(
+            metadata, future or order
+        )
+        now = self._clock_ms()
+        if abs(self._clock_offset_ms) > MAX_ENTRY_CLOCK_DRIFT_MS:
+            raise OrderError("Spot Testnet clock drift exceeds the entry safety limit")
+        for observed in (metadata.observed_at_ms, snapshot.observed_at_ms):
+            age = now - observed
+            if age < 0 or age > MAX_PREFLIGHT_AGE_MS:
+                raise OrderError("Spot Testnet preflight snapshot is stale")
+        venue_snapshot = VenueSnapshot(
+            can_trade=snapshot.can_trade,
+            balances=tuple(
+                VenueBalance(item.asset, item.free, item.locked) for item in snapshot.balances
+            ),
+            open_orders=open_orders,
+            reference_price=reference,
+            average_price=average,
+            average_price_mins=average_mins,
+            last_price=last,
+            observed_at_ms=snapshot.observed_at_ms,
+        )
+        validate_submission(
+            order,
+            metadata,
+            venue_snapshot,
+            stop_price=stop_price,
+            reserve_protection=reserve_protection,
+        )
+        if future is not None:
+            # Verify deterministic exit feasibility before buying. Only this
+            # hypothetical snapshot adds the acquisition; it never reserves or
+            # authorizes selling manual account inventory.
+            projected = replace(
+                venue_snapshot,
+                balances=tuple(
+                    VenueBalance(item.asset, order.quantity, Decimal(0))
+                    if item.asset == metadata.base_asset
+                    else item
+                    for item in venue_snapshot.balances
+                ),
+            )
+            validate_submission(future, metadata, projected, stop_price=protection_stop)
+        self._metadata = metadata
+        return metadata
 
     @staticmethod
     def _validate_client_id(client_order_id: str) -> None:
         if not CLIENT_ORDER_ID_RE.fullmatch(client_order_id):
-            raise OrderError(
-                "client_order_id must be 1 to 36 Binance-safe ASCII characters"
-            )
+            raise OrderError("client_order_id must be 1 to 36 Binance-safe ASCII characters")
 
-    async def submit(self, order: OrderRequest) -> ExchangeUpdate:
-        order.validate()
-        if order.symbol != self.symbol:
-            raise OrderError("order symbol does not match transport symbol")
+    async def submit(
+        self,
+        order: OrderRequest,
+        *,
+        deadline_ms: int | None = None,
+        reserve_protection: bool = False,
+        before_send: Callable[[], None] | None = None,
+        protection_target: Decimal | None = None,
+        protection_stop: Decimal | None = None,
+    ) -> ExchangeUpdate:
         if order.order_type != "LIMIT":
             raise OrderError("testnet transport only submits LIMIT orders")
-        self._validate_client_id(order.client_order_id)
-        metadata = await self.exchange_info()
-        validate_submission_metadata(metadata)
-        if order.quote_asset != metadata.quote_asset:
-            raise OrderError("order quote asset does not match exchange metadata")
-        if order.price < metadata.min_price or order.price > metadata.max_price:
-            raise OrderError("price is outside exchange limits")
-        validate_order_filters(order.quantity, order.price, metadata.filters)
-        snapshot = await self.account_snapshot()
-        if not snapshot.can_trade:
-            raise OrderError("Spot Testnet account is not permitted to trade")
-        required_asset = metadata.quote_asset if order.side == "BUY" else metadata.base_asset
-        required = order.quantity * order.price if order.side == "BUY" else order.quantity
-        if snapshot.balance(required_asset).free < required:
-            raise OrderError("Spot Testnet account has insufficient available balance")
+        if deadline_ms is not None and (
+            isinstance(deadline_ms, bool) or not isinstance(deadline_ms, int)
+        ):
+            raise TypeError("deadline_ms must be an integer UTC millisecond timestamp")
+        if before_send is not None and not callable(before_send):
+            raise TypeError("before_send must be callable")
+        await self.prepare_submission(
+            order,
+            reserve_protection=reserve_protection,
+            protection_target=protection_target,
+            protection_stop=protection_stop,
+        )
+        self._check_cooldown()
+        if deadline_ms is not None:
+            if self._clock_ms() >= deadline_ms:
+                raise SubmissionPrevented("entry authorization expired before submission")
+        if before_send is not None:
+            before_send()
         self._expected[order.client_order_id] = order
         raw = await self.request(
             "POST",
@@ -752,9 +1036,7 @@ class BinanceTestnetTransport:
                     raise OrderInvariantError("trade order ID does not match order")
                 trade_id = _response_int(trade.get("id"), "trade ID")
                 _response_decimal(trade.get("price"), "trade price", allow_zero=False)
-                quantity = _response_decimal(
-                    trade.get("qty"), "trade quantity", allow_zero=False
-                )
+                quantity = _response_decimal(trade.get("qty"), "trade quantity", allow_zero=False)
                 quote_quantity = _response_decimal(
                     trade.get("quoteQty"), "trade quote quantity", allow_zero=False
                 )

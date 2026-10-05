@@ -52,3 +52,30 @@ ondan ek kapanış değerlendirmesi alınmadı. Yerel tam paket: 108 başarılı
 OCO hedef/stop tek rezerv kullanır; ALL_DONE tek başına rezerv bırakmaz.
 Anahtarlı Testnet işlemi, otomatik kısmi giriş→koruma akışı ve üretim uygunluğu
 kanıtlanmış değildir. Bu sınırlı entegrasyon temeli canlı kullanım onayı değildir.
+
+## Süreli testnet çevrimi — 6 Ekim 2026
+
+Ayrı Astra/high incelemesi yeni filtreleri, süreli giriş→OCO denetleyicisini,
+komut satırını ve gerçek adaptör üzerinden taklit HTTP testlerini değerlendirdi.
+Bulunan ve giderilenler:
+
+- P1: Kalıcı durdurma, yeniden başlatmada yeni BUY gönderimini engellemiyordu.
+  İlk kontrolden sonra, beklenen ağ ön kontrolleri tamamlanınca gönderimden hemen
+  önce de kalıcı durdurma/süre kontrolü yapılır. Kesin gönderilmemiş sonuç ayrı
+  SubmissionPrevented kaydıyla yerel reddedilir; belirsiz sonuç UNKNOWN kalır.
+- P2: ABORTED deneme hiç gönderilmemiş emri borsada arıyordu. Yerel iptal kanıtı
+  korunur, tekrar yönetim sorgu veya yeni BUY oluşturmaz.
+- P2: Eski PROTECTED önbelleği belirsizleşen emir kaydına rağmen korunuyordu.
+  Güncel emir NEW değilse veya beş saniyelik gözlem eskidiyse koruma doğrulanmış sayılmaz.
+- P2: BUY öncesinde hedef/stop ve OCO türleri kontrol edilmiyordu. Gelecekteki
+  tam miktarlı koruma, varsayımsal satın alınmış bakiye ile hem ilk ön kontrolde hem
+  son BUY gönderiminden önce doğrulanır; gerçek koruma dolum/komisyon sonrası tekrar sınanır.
+- P2: Quote MAX_ASSET için piyasa fiyat tahmini kesin sınır kabul ediliyordu.
+  MARKET/OCO bu özel kural altında engellenir. MAX_POSITION için belgede açık
+  olmayan kısmi miktar yorumu yerine toplam orijinal açık BUY miktarı muhafazakâr kullanılır.
+
+Son bağımsız hedefli kontrolde 65 test geçti, 20 PostgreSQL varyantı yerel servis
+olmadığından atlandı. İncelenen sınırlı testnet kapsamında açık P1/P2 bildirilmedi.
+Ana ajanın tüm yerel paketi: 157 başarılı, 58 PostgreSQL varyantı atlandı; bunlar
+CI’da çalıştırılır. Gerçek hesap anahtarı, imzalı hesap denemesi veya gerçek Testnet
+emri kullanılmadı. Üretim onayı ve strateji başarısı iddia edilmez.

@@ -76,6 +76,10 @@ class Venue:
                 return httpx.Response(200, json=data)
             return basic
         path = req.url.path
+        if path == "/api/v3/referencePrice":
+            return httpx.Response(
+                200, json={"symbol": "BTCUSDT", "referencePrice": "100", "timestamp": NOW}
+            )
         if path == "/api/v3/ticker/price":
             return httpx.Response(200, json={"symbol": "BTCUSDT", "price": "100"})
         if path == "/api/v3/orderList/oco":
@@ -259,7 +263,12 @@ def test_oco_unevaluated_filters_block_mutation_but_not_recovery(tmp_path: Path,
             with pytest.raises(OrderError):
                 await life.submit(protection())
             assert venue.posts == 0
-            # Authenticated recovery is independent of entry readiness.
+            with pytest.raises(KeyError):
+                store.get("protect")
+            venue.extra_filter = None
+            await life.submit(protection())
+            # A later rule change or halt must not block existing-order recovery.
+            venue.extra_filter = rule
             venue.halted = True
             assert (await life.reconcile("protect")).order.state == OrderState.NEW
 

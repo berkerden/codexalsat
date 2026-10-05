@@ -15,6 +15,7 @@ from spotlab.orders import (
     OrderRequest,
     OrderState,
     RetryableTransportError,
+    SubmissionPrevented,
 )
 from spotlab.testnet import (
     TESTNET_BASE_URL,
@@ -65,6 +66,9 @@ def exchange_info() -> dict[str, object]:
                         "filterType": "NOTIONAL",
                         "minNotional": "5.00",
                         "maxNotional": "10000000.00",
+                        "applyMinToMarket": False,
+                        "applyMaxToMarket": False,
+                        "avgPriceMins": 5,
                     },
                 ],
             }
@@ -91,6 +95,12 @@ def commission() -> dict[str, object]:
             "taker": "0.001",
             "buyer": "0",
             "seller": "0",
+        },
+        "discount": {
+            "enabledForAccount": False,
+            "enabledForSymbol": False,
+            "discountAsset": "BNB",
+            "discount": "0.25",
         },
     }
 
@@ -144,6 +154,13 @@ def response_for_basics(http_request: httpx.Request) -> httpx.Response | None:
         return httpx.Response(200, json=account())
     if path == "/api/v3/account/commission":
         return httpx.Response(200, json=commission())
+    if path == "/api/v3/myFilters":
+        return httpx.Response(
+            200,
+            json={"symbolFilters": [], "exchangeFilters": [], "assetFilters": []},
+        )
+    if path == "/api/v3/openOrders":
+        return httpx.Response(200, json=[])
     return None
 
 
@@ -229,13 +246,16 @@ async def test_submit_runs_fresh_filter_account_and_commission_preflight() -> No
     assert result.status is OrderState.NEW
     assert result.exchange_order_id == "BTCUSDT:42"
     assert [balance.asset for balance in snapshot.balances] == ["BTC", "USDT"]
-    assert paths[:6] == [
+    assert paths[:9] == [
         "/api/v3/time",
         "/api/v3/exchangeInfo",
+        "/api/v3/myFilters",
         "/api/v3/time",
         "/api/v3/account",
         "/api/v3/account/commission",
+        "/api/v3/openOrders",
         "/api/v3/order",
+        "/api/v3/myTrades",
     ]
 
 
@@ -493,8 +513,8 @@ async def test_halted_symbol_can_be_reconciled_but_cannot_be_submitted() -> None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("extra_rule", ["MIN_NOTIONAL", "FUTURE_UNSUPPORTED_RULE"])
-async def test_unevaluated_rules_block_submit_without_blocking_queries(extra_rule: str) -> None:
+@pytest.mark.parametrize("extra_rule", ["FUTURE_UNSUPPORTED_RULE"])
+async def test_unknown_rules_block_submit_without_blocking_queries(extra_rule: str) -> None:
     mutations = []
 
     def handler(http_request: httpx.Request) -> httpx.Response:
@@ -525,3 +545,243 @@ async def test_unevaluated_rules_block_submit_without_blocking_queries(extra_rul
             await transport.submit(request())
         assert mutations == []
         assert (await transport.query("spotlab-safe-id")).status is OrderState.NEW
+
+
+@pytest.mark.asyncio
+async def test_supported_dynamic_filter_is_evaluated_before_submit() -> None:
+    posts = 0
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        nonlocal posts
+        if http_request.url.path == "/api/v3/exchangeInfo":
+            info = exchange_info()
+            info["symbols"][0]["filters"].append(  # type: ignore[index]
+                {
+                    "filterType": "PERCENT_PRICE_BY_SIDE",
+                    "bidMultiplierUp": "1.10",
+                    "bidMultiplierDown": "0.90",
+                    "askMultiplierUp": "1.20",
+                    "askMultiplierDown": "0.80",
+                    "avgPriceMins": 5,
+                }
+            )
+            return httpx.Response(200, json=info)
+        basic = response_for_basics(http_request)
+        if basic is not None:
+            return basic
+        if http_request.url.path == "/api/v3/referencePrice":
+            return httpx.Response(
+                200,
+                json={"symbol": "BTCUSDT", "referencePrice": "1000", "timestamp": NOW},
+            )
+        if http_request.url.path == "/api/v3/order":
+            posts += 1
+            return httpx.Response(200, json=order_response("spotlab-safe-id"))
+        if http_request.url.path == "/api/v3/myTrades":
+            return httpx.Response(200, json=[])
+        raise AssertionError(http_request.url.path)
+
+    async with BinanceTestnetTransport(
+        "BTCUSDT",
+        credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler),
+        clock_ms=lambda: NOW,
+    ) as transport:
+        assert (await transport.submit(request())).status is OrderState.NEW
+    assert posts == 1
+
+
+@pytest.mark.asyncio
+async def test_deadline_and_before_send_callback_block_before_post() -> None:
+    posts = 0
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        nonlocal posts
+        basic = response_for_basics(http_request)
+        if basic is not None:
+            return basic
+        if http_request.url.path == "/api/v3/order":
+            posts += 1
+            return httpx.Response(200, json=order_response("spotlab-safe-id"))
+        raise AssertionError(http_request.url.path)
+
+    async with BinanceTestnetTransport(
+        "BTCUSDT",
+        credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler),
+        clock_ms=lambda: NOW,
+    ) as transport:
+        with pytest.raises(SubmissionPrevented, match="expired"):
+            await transport.submit(request(), deadline_ms=NOW)
+        callback_calls = 0
+
+        def stop() -> None:
+            nonlocal callback_calls
+            callback_calls += 1
+            raise SubmissionPrevented("cycle stopped")
+
+        with pytest.raises(SubmissionPrevented, match="stopped"):
+            await transport.submit(request(), deadline_ms=NOW + 1, before_send=stop)
+    assert callback_calls == 1
+    assert posts == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_discount", [False, True])
+async def test_third_asset_or_missing_commission_discount_blocks_post(
+    missing_discount: bool,
+) -> None:
+    posts = 0
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        nonlocal posts
+        if http_request.url.path == "/api/v3/account/commission":
+            data = commission()
+            if missing_discount:
+                del data["discount"]
+            else:
+                data["discount"] = {
+                    "enabledForAccount": True,
+                    "enabledForSymbol": True,
+                    "discountAsset": "BNB",
+                    "discount": "0.25",
+                }
+            return httpx.Response(200, json=data)
+        basic = response_for_basics(http_request)
+        if basic is not None:
+            return basic
+        if http_request.url.path == "/api/v3/order":
+            posts += 1
+            return httpx.Response(200, json=order_response("spotlab-safe-id"))
+        raise AssertionError(http_request.url.path)
+
+    async with BinanceTestnetTransport(
+        "BTCUSDT",
+        credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler),
+        clock_ms=lambda: NOW,
+    ) as transport:
+        with pytest.raises(ValueError, match="discount"):
+            await transport.submit(request())
+    assert posts == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("discount_asset", ["BTC", "USDT"])
+async def test_base_or_quote_commission_discount_is_allowed(discount_asset: str) -> None:
+    posts = 0
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        nonlocal posts
+        if http_request.url.path == "/api/v3/account/commission":
+            data = commission()
+            discount = data["discount"]
+            assert isinstance(discount, dict)
+            discount["enabledForAccount"] = True
+            discount["enabledForSymbol"] = True
+            discount["discountAsset"] = discount_asset
+            return httpx.Response(200, json=data)
+        basic = response_for_basics(http_request)
+        if basic is not None:
+            return basic
+        if http_request.url.path == "/api/v3/order":
+            posts += 1
+            return httpx.Response(200, json=order_response("spotlab-safe-id"))
+        if http_request.url.path == "/api/v3/myTrades":
+            return httpx.Response(200, json=[])
+        raise AssertionError(http_request.url.path)
+
+    async with BinanceTestnetTransport(
+        "BTCUSDT",
+        credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler),
+        clock_ms=lambda: NOW,
+    ) as transport:
+        assert (await transport.submit(request())).status is OrderState.NEW
+    assert posts == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["missing_filters", "clock_drift", "stale"])
+async def test_incomplete_or_unsafe_preflight_snapshot_blocks_post(failure: str) -> None:
+    posts = 0
+    current = NOW + (1_001 if failure == "clock_drift" else 0)
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        nonlocal current, posts
+        path = http_request.url.path
+        if path == "/api/v3/time":
+            server_time = NOW if failure == "clock_drift" else current
+            return httpx.Response(200, json={"serverTime": server_time})
+        if path == "/api/v3/myFilters" and failure == "missing_filters":
+            return httpx.Response(200, json={"symbolFilters": [], "exchangeFilters": []})
+        if path == "/api/v3/myFilters" and failure == "stale":
+            current += 5_001
+            return httpx.Response(
+                200,
+                json={"symbolFilters": [], "exchangeFilters": [], "assetFilters": []},
+            )
+        basic = response_for_basics(http_request)
+        if basic is not None:
+            return basic
+        if path == "/api/v3/order":
+            posts += 1
+            return httpx.Response(200, json=order_response("spotlab-safe-id"))
+        raise AssertionError(path)
+
+    async with BinanceTestnetTransport(
+        "BTCUSDT",
+        credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler),
+        clock_ms=lambda: current,
+    ) as transport:
+        with pytest.raises(ValueError):
+            await transport.submit(request())
+    assert posts == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["target_tick", "oco_type", "market_lot"])
+async def test_future_protection_is_checked_before_buy_post(fault: str) -> None:
+    mutations = []
+
+    def handler(req):
+        if req.method != "GET":
+            mutations.append(req.url.path)
+        if req.url.path == "/api/v3/exchangeInfo":
+            info = exchange_info()
+            symbol = info["symbols"][0]
+            symbol["orderTypes"] += ["LIMIT_MAKER", "STOP_LOSS"]
+            if fault == "oco_type":
+                symbol["orderTypes"].remove("STOP_LOSS")
+            if fault == "market_lot":
+                symbol["filters"].append(
+                    {
+                        "filterType": "MARKET_LOT_SIZE",
+                        "minQty": "0",
+                        "maxQty": "0.005",
+                        "stepSize": "0",
+                    }
+                )
+            return httpx.Response(200, json=info)
+        if req.url.path == "/api/v3/ticker/price":
+            return httpx.Response(200, json={"symbol": "BTCUSDT", "price": "1000"})
+        basic = response_for_basics(req)
+        if basic is not None:
+            return basic
+        raise AssertionError(req.url.path)
+
+    async with BinanceTestnetTransport(
+        "BTCUSDT",
+        credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler),
+        clock_ms=lambda: NOW,
+    ) as transport:
+        with pytest.raises(ValueError):
+            await transport.submit(
+                request(),
+                reserve_protection=True,
+                protection_target=D("1100.01" if fault == "target_tick" else "1100"),
+                protection_stop=D("900"),
+            )
+    assert mutations == []
