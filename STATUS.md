@@ -1,8 +1,9 @@
-# Durum — 2026-10-05
+# Durum — 2026-10-06
 
 Yerel kaynak gerçek `berkerden/codexalsat` clone'udur. Public depo kullanılır.
 PR #3 araştırma/paper sürümünü main’e taşıdı; issue #2 canlı öncesi kalan işleri izler.
-Testnet temeli `feat/testnet-adapter` dalında geliştirilir; üretim kapalıdır.
+PR #4 testnet temelini main’e taşıdı. Devamı `codex/testnet-entry-protection` dalındadır;
+üretim kapalıdır.
 
 - A0/A1: GitHub, CI, SPEC ve yerel kurulum hazır. Tamamlanan kaynaklar küçük
   commitlerle gönderiliyor; bağlı GitHub API ve aynı clone'a fetch kullanılır.
@@ -13,31 +14,31 @@ Testnet temeli `feat/testnet-adapter` dalında geliştirilir; üretim kapalıdı
   desteklenmedi; [sayısal sonuçlar](docs/RESULTS.md). Testle yeniden optimizasyon yok.
 - A4/A5: Türkçe panel, Decimal maliyet/marj, kalıcı risk sınırlı paper motoru,
   süreli giriş yetkisi ve çıkış yönetiminden ayrı durdurma kontrolleri hazır.
-- A6 kısmi: sabit Testnet adresine imzalı bağlantı, ücret duyarlı kalıcı emir
-  kayıtları ve tek rezervli OCO koruma çekirdeği eklendi. Yeniden başlatma, belirsiz
-  yanıt, eksik dolum ve emir kimliği kontrolleri mock HTTP ile sınandı. Salt okunur
-  ön kontrol ve yerel gizli anahtar kurulumu var; [kapsam](docs/TESTNET.md).
-  Tam filtre değerlendirmesi ve otomatik giriş→koruma akışı yok; bu nedenle
-  mevcut borsa filtrelerinde yeni emir gönderimi engellenir. Anahtar sağlanmadı,
-  gerçek testnet emri veya imzalı hesap sorgusu yapılmadı.
+- A6 kısmi: hesap/sembol/borsa filtreleri, süreli ve tek çevrimlik testnet alış→OCO
+  yönetimi eklendi. Kısmi alışta kalan giriş iptal edilir; dolum/komisyon
+  kesinleştikten sonra net envanter korunur. Kalıcı durdurma, gönderim öncesi son
+  kontrol, eski koruma gözlemi ve belirsiz emirleri tekrar göndermeme testleri var.
+  Ayrı araç açık testnet onayı ve en fazla 100 sanal USDT giriş tutarı ister;
+  stratejiyle tekrar alış açmaz. [Kurulum ve sınırlar](docs/TESTNET.md).
+  Yerel testnet anahtarı yok; imzalı gerçek hesap sorgusu veya testnet emri yapılmadı.
 - A7: ayrı Astra bağlamında kritik inceleme ve hedefli tekrar doğrulama yapıldı;
   kapsam içindeki P1 bulguları giderildi. [İnceleme kaydı](docs/REVIEW.md).
 - A8: temiz GitHub clone'unda kurulum, iki sunucunun başlatılması ve supervisor
   kapanınca iki portun da serbest kalması doğrulandı. Kurtarma testleri ve
   [operasyon](docs/OPERATIONS.md) belgesi mevcut. Docker bu makinede yok.
 
-Doğrulama: 6df94d1 üzerinde GitHub CI üç işi geçti; backend 84 test (SQLite +
-PostgreSQL 16), frontend 5 birim test; 2 masaüstü/mobil tarayıcı akışı, lint/typecheck/build ve
-bağımlılık güvenlik taramaları başarılı. Yeni testnet kapsamı yerelde 108 testi geçti, 36 PostgreSQL senaryosu servis
-yokluğundan atlandı; lint ve strict tip kontrolü geçti. Bu dalın GitHub CI
-sonucu PR üzerinde doğrulanır. Yerelde PostgreSQL senaryoları atlanır.
+Önceki main sürümü PR #4 CI’da 144 backend testi (SQLite + PostgreSQL 16),
+5 frontend birim testi, 2 tarayıcı akışı, lint/tip/build ve güvenlik kontrollerini geçti.
+Yeni çevrim ve filtre paketi yerelde 157 testi geçti; 58 PostgreSQL varyantı
+servis olmadığı için atlandı ve CI’da yürütülür. Lint ve strict tip kontrolü geçti.
+Son CI sonucu ilgili PR üzerinde kaydedilir.
 
 Gerçek tarayıcıda BTC/SOL, periyot değişimi, araştırma formu, sanal oturum başlatma/durdurma,
 canlı mod kilidi ve 390×844 mobil menü/durdurma çubuğu kontrol edildi. Deneme paper oturumu durduruldu, açık pozisyon yok.
 Bu kısa kontrol ileri gözlem süresi yerine geçmez.
 
-Canlı **kapalı**. Eksikler: tüm filtreler, otomatik testnet giriş/koruma entegrasyonu,
-anahtarlı borsa doğrulaması, BNB komisyon muhasebesi, pozisyon içi portföy maksimum düşüşü, 30 takvim günü ileri paper,
+Canlı **kapalı**. Eksikler: anahtarlı testnet/borsa doğrulaması, stratejiyle sürekli
+giriş ve kesintisiz koruma/izleme entegrasyonu, hesap çapında sahipsiz emir ve reset kurtarma, BNB komisyon muhasebesi, pozisyon içi portföy maksimum düşüşü, 30 takvim günü ileri paper,
 yeterli ekonomik avantaj, üretim operasyon değerlendirmesi. PostgreSQL mantıksal
 kurtarma ve eşzamanlılık CI'da sınanır; fiziksel pg_dump/restore ve Docker testi
 ayrıca gerekir. Kullanıcı canlı para işlemi yetkisi vermedi; geliştirmede borsaya emir gönderilmedi.

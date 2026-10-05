@@ -21,14 +21,12 @@ from spotlab.orders import (
     OrderState,
     OrderStore,
     deterministic_client_order_id,
-    validate_order_filters,
 )
 from spotlab.testnet import (
     BinanceTestnetTransport,
     _mapping,
     _response_decimal,
     _response_int,
-    validate_submission_metadata,
 )
 
 D = Decimal
@@ -141,42 +139,25 @@ class ProtectionLifecycle:
         order = request.order
         if order.symbol != self.transport.symbol:
             raise OrderError("protection symbol does not match transport")
+        # Local checks precede reservation/claim. Failure here proves no POST was
+        # attempted, so a later explicit management pass may retry the same plan.
+        try:
+            existing = self.store.get(order.intent_id)
+        except KeyError:
+            existing = None
+        if existing is not None:
+            self._persist_payload(request)
+            record, _ = self.store.create_or_get(order)
+            if record.state is not OrderState.INTENDED:
+                return record
+        await self.transport.prepare_submission(order, stop_price=request.stop_price)
         self._persist_payload(request)
         record, created = self.store.create_or_get(order)
-        if not created:
+        if not created and record.state is not OrderState.INTENDED:
             return record
         if not self.store.claim_submission(order.intent_id):
             return self.store.get(order.intent_id)
         try:
-            metadata = await self.transport.exchange_info()
-            validate_submission_metadata(metadata)
-            if not metadata.oco_allowed or not {"LIMIT_MAKER", "STOP_LOSS"}.issubset(
-                metadata.order_types
-            ):
-                raise OrderError("symbol does not support the required OCO order types")
-            if order.quote_asset != metadata.quote_asset:
-                raise OrderError("protection quote asset does not match metadata")
-            for price in (order.price, request.stop_price):
-                validate_order_filters(order.quantity, price, metadata.filters)
-                if price < metadata.min_price or price > metadata.max_price:
-                    raise OrderError("protection price outside exchange limits")
-            raw = _mapping(
-                await self.transport.request(
-                    "GET", "/api/v3/ticker/price", {"symbol": order.symbol}, signed=False
-                ),
-                "last price",
-            )
-            if raw.get("symbol") != order.symbol:
-                raise OrderInvariantError("last-price symbol mismatch")
-            last = _response_decimal(raw.get("price"), "last price", allow_zero=False)
-            if not request.stop_price < last < order.price:
-                raise OrderError("SELL protection requires target > last price > stop")
-            snapshot = await self.transport.account_snapshot()
-            if (
-                not snapshot.can_trade
-                or snapshot.balance(metadata.base_asset).free < order.quantity
-            ):
-                raise OrderError("testnet account cannot fund protection")
             # Ignore optimistic POST status. Only a subsequent list + both child
             # queries with authenticated trade details can establish coverage.
             await self.transport.request(
