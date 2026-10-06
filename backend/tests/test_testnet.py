@@ -702,6 +702,68 @@ async def test_base_or_quote_commission_discount_is_allowed(discount_asset: str)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rate", ["0.00000000", "0.25"])
+async def test_null_discount_asset_allows_observation_but_blocks_enabled_submission(rate):
+    posts = 0
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        nonlocal posts
+        if http_request.method == "POST":
+            posts += 1
+            raise AssertionError("unknown fee asset must prevent submission")
+        if http_request.url.path == "/api/v3/account/commission":
+            data = commission()
+            data["discount"] = {
+                "enabledForAccount": True,
+                "enabledForSymbol": True,
+                "discountAsset": None,
+                "discount": rate,
+            }
+            return httpx.Response(200, json=data)
+        basic = response_for_basics(http_request)
+        assert basic is not None
+        return basic
+
+    async with BinanceTestnetTransport(
+        "BTCUSDT", credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler), clock_ms=lambda: NOW,
+    ) as transport:
+        snapshot = await transport.account_snapshot()
+        assert snapshot.can_trade is True
+        assert snapshot.discount is not None
+        assert snapshot.discount.asset is None
+        assert snapshot.discount.rate == D(rate)
+        with pytest.raises(ValueError, match="discount"):
+            await transport.submit(request())
+    assert posts == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_asset", ["", 123, [], {}, "missing"])
+async def test_malformed_or_missing_discount_asset_remains_rejected(bad_asset):
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        if http_request.url.path == "/api/v3/account/commission":
+            data = commission()
+            discount = data["discount"]
+            assert isinstance(discount, dict)
+            if bad_asset == "missing":
+                del discount["discountAsset"]
+            else:
+                discount["discountAsset"] = bad_asset
+            return httpx.Response(200, json=data)
+        basic = response_for_basics(http_request)
+        assert basic is not None
+        return basic
+
+    async with BinanceTestnetTransport(
+        "BTCUSDT", credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler), clock_ms=lambda: NOW,
+    ) as transport:
+        with pytest.raises(OrderInvariantError, match="discount asset"):
+            await transport.account_snapshot()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["missing_filters", "clock_drift", "stale"])
 async def test_incomplete_or_unsafe_preflight_snapshot_blocks_post(failure: str) -> None:
     posts = 0

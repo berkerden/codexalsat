@@ -156,7 +156,7 @@ class CommissionRates:
 class CommissionDiscount:
     enabled_for_account: bool
     enabled_for_symbol: bool
-    asset: str
+    asset: str | None
     rate: Decimal
 
 
@@ -624,7 +624,13 @@ class BinanceTestnetTransport:
                 enabled_for_symbol, bool
             ):
                 raise OrderInvariantError("commission discount enablement is malformed")
-            if not isinstance(discount_asset, str) or not discount_asset:
+            # Testnet can explicitly return null even with both flags enabled.
+            # Preserve unknown fee denomination for read-only diagnostics; the
+            # submission gate still blocks enabled discounts without a safe asset.
+            if "discountAsset" not in discount_data or (
+                discount_asset is not None
+                and (not isinstance(discount_asset, str) or not discount_asset)
+            ):
                 raise OrderInvariantError("commission discount asset is malformed")
             discount = CommissionDiscount(
                 enabled_for_account,
