@@ -4,7 +4,8 @@ This module is isolated from the paper engine and the HTTP application. Producti
 hard-disabled. There is no strategy-driven trader or UI activation for Testnet. The diagnostic CLI offers
 credential setup, read-only account preflight, local status, and reconciliation. A separate
 explicitly confirmed CLI runs one bounded virtual-funds entry and manages its protection. The transport and OCO lifecycle are exercised with mocked HTTP responses.
-Authenticated exchange execution has **not** been verified; no account keys were supplied.
+Authenticated exchange execution has **not** been verified. Read-only authenticated account
+and quote preflight passed for BTCUSDT and SOLUSDT on 2026-10-06 using local credentials.
 
 ## Local credential setup
 
@@ -26,7 +27,10 @@ files accessible to other local users. Keep the computer account and disk protec
 secret manager can instead inject `SPOTLAB_TESTNET_API_KEY` and `SPOTLAB_TESTNET_API_SECRET`.
 Production `BINANCE_API_KEY` variables are not read. Active third-asset commission discounts
 (such as BNB) block new operations until that fee mode can be accounted for; the tool does not
-change the exchange account setting. No balance or credential is printed by preflight.
+change the exchange account setting. Testnet may return an explicit null discount asset, even
+with enabled flags and a zero discount rate. Read-only diagnostics preserve that unknown value;
+an enabled discount with an unknown asset still blocks submissions. Missing or malformed fields
+remain rejected. No balance or credential is printed by preflight.
 A blocked result prints an exception category only; do not enable HTTP debug logging with secrets.
 
 Reconciliation requires an existing durable intent, not an arbitrary exchange account order:
@@ -141,7 +145,7 @@ dust disposal or ledger reset is provided.
 
 ## Remaining live blockers
 
-Authenticated Testnet failure/restart evidence still requires locally configured credentials.
+Authenticated Testnet order/failure/restart evidence remains outstanding after read-only preflight.
 Broader unattended entry selection, UI controls, account-wide orphan/reset recovery, third-asset
 commission pricing and production operations remain unfinished. The paper UI is not wired to
 these adapters. Live authorization, 30 calendar days of forward paper observation, economic
@@ -157,6 +161,10 @@ timeouts, cooldown, response identity, fee inventory, shared reservations, resta
 partial exits, incomplete/malformed child observations, bounded entry/protection cycles, persisted
 stop races, local abort, stale coverage and secret-file protection. All cycle scenarios also run
 against PostgreSQL in CI. None of these mock outcomes is an authenticated exchange fill.
+
+On 2026-10-06, signed account and commission queries plus public metadata and quotes passed for
+BTCUSDT and SOLUSDT. No order was submitted. Regression tests cover explicit null discount assets
+and prove that enabled unknown fee assets still prevent any order POST, even at a zero rate.
 
 Protocol references: [official Testnet REST API](https://github.com/binance/binance-spot-api-docs/blob/master/testnet/rest-api.md)
 and [general information](https://github.com/binance/binance-spot-api-docs/blob/master/testnet/general-info.md).

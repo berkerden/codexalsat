@@ -2,8 +2,7 @@
 
 Yerel kaynak gerçek `berkerden/codexalsat` clone'udur. Public depo kullanılır.
 PR #3 araştırma/paper sürümünü main’e taşıdı; issue #2 canlı öncesi kalan işleri izler.
-PR #4 testnet temelini main’e taşıdı. Devamı `codex/testnet-entry-protection` dalındadır;
-üretim kapalıdır.
+PR #4 testnet temelini, PR #5 süreli alış→OCO çevrimini main’e taşıdı; üretim kapalıdır.
 
 - A0/A1: GitHub, CI, SPEC ve yerel kurulum hazır. Tamamlanan kaynaklar küçük
   commitlerle gönderiliyor; bağlı GitHub API ve aynı clone'a fetch kullanılır.
@@ -20,18 +19,19 @@ PR #4 testnet temelini main’e taşıdı. Devamı `codex/testnet-entry-protecti
   kontrol, eski koruma gözlemi ve belirsiz emirleri tekrar göndermeme testleri var.
   Ayrı araç açık testnet onayı ve en fazla 100 sanal USDT giriş tutarı ister;
   stratejiyle tekrar alış açmaz. [Kurulum ve sınırlar](docs/TESTNET.md).
-  Yerel testnet anahtarı yok; imzalı gerçek hesap sorgusu veya testnet emri yapılmadı.
+  Yerel anahtarla BTCUSDT ve SOLUSDT salt okunur hesap/komisyon ve kotasyon kontrolü
+  6 Ekim’de geçti. Null komisyon indirim varlığı gözlemde korunur; indirim etkinken
+  varlık belirsizse emir gönderimi engellenir. Testnet emri henüz gönderilmedi.
 - A7: ayrı Astra bağlamında kritik inceleme ve hedefli tekrar doğrulama yapıldı;
   kapsam içindeki P1 bulguları giderildi. [İnceleme kaydı](docs/REVIEW.md).
 - A8: temiz GitHub clone'unda kurulum, iki sunucunun başlatılması ve supervisor
   kapanınca iki portun da serbest kalması doğrulandı. Kurtarma testleri ve
   [operasyon](docs/OPERATIONS.md) belgesi mevcut. Docker bu makinede yok.
 
-Önceki main sürümü PR #4 CI’da 144 backend testi (SQLite + PostgreSQL 16),
+Main sürümü PR #5 CI’da 215 backend testi (SQLite + PostgreSQL 16),
 5 frontend birim testi, 2 tarayıcı akışı, lint/tip/build ve güvenlik kontrollerini geçti.
-Yeni çevrim ve filtre paketi yerelde 157 testi geçti; 58 PostgreSQL varyantı
-servis olmadığı için atlandı ve CI’da yürütülür. Lint ve strict tip kontrolü geçti.
-Son CI sonucu ilgili PR üzerinde kaydedilir.
+Yerelde servis olmadığı için atlanan 58 PostgreSQL varyantı CI’da geçti.
+Null komisyon alanı uyumluluk düzeltmesinin son CI sonucu ilgili PR üzerinde kaydedilir.
 
 Gerçek tarayıcıda BTC/SOL, periyot değişimi, araştırma formu, sanal oturum başlatma/durdurma,
 canlı mod kilidi ve 390×844 mobil menü/durdurma çubuğu kontrol edildi. Deneme paper oturumu durduruldu, açık pozisyon yok.
