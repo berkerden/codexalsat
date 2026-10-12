@@ -1,4 +1,4 @@
-# Durum — 2026-10-06
+# Durum — 2026-10-13
 
 Yerel kaynak gerçek `berkerden/codexalsat` clone'udur. Public depo kullanılır.
 PR #3 araştırma/paper sürümünü main’e taşıdı; issue #2 canlı öncesi kalan işleri izler.
@@ -20,18 +20,25 @@ PR #4 testnet temelini, PR #5 süreli alış→OCO çevrimini main’e taşıdı
   Ayrı araç açık testnet onayı ve en fazla 100 sanal USDT giriş tutarı ister;
   stratejiyle tekrar alış açmaz. [Kurulum ve sınırlar](docs/TESTNET.md).
   Yerel anahtarla BTCUSDT ve SOLUSDT salt okunur hesap/komisyon ve kotasyon kontrolü
-  6 Ekim’de geçti. Null komisyon indirim varlığı gözlemde korunur; indirim etkinken
-  varlık belirsizse emir gönderimi engellenir. Testnet emri henüz gönderilmedi.
+  6 Ekim’de geçti. 9 Ekim’de hesap sorgusu ve eşleştirme yapmayan order/test isteği
+  BTC/SOL komisyon bileşenlerini sıfır doğruladı. Tam sıfır komisyon kanıtı dışında
+  etkin bilinmeyen indirim varlığı emir gönderimini engeller. Bu istisna yalnız
+  Testnet içindir; sıfır indirim oranı tek başına yeterli değildir.
+  13 Ekim’de sınırlı BTC limit emri NEW→CANCELED, çevrim NO_FILL sonucuyla doğrulandı.
+  Yeni süreçte aynı çevrim NO_FILL kaldı; bot envanteri sıfır. Dolum ve gerçek OCO
+  kurulumu/kapanışı henüz doğrulanmadı.
 - A7: ayrı Astra bağlamında kritik inceleme ve hedefli tekrar doğrulama yapıldı;
   kapsam içindeki P1 bulguları giderildi. [İnceleme kaydı](docs/REVIEW.md).
 - A8: temiz GitHub clone'unda kurulum, iki sunucunun başlatılması ve supervisor
   kapanınca iki portun da serbest kalması doğrulandı. Kurtarma testleri ve
   [operasyon](docs/OPERATIONS.md) belgesi mevcut. Docker bu makinede yok.
 
-Main sürümü PR #5 CI’da 215 backend testi (SQLite + PostgreSQL 16),
+Main sürümü PR #6 CI’da 222 backend testi (SQLite + PostgreSQL 16),
 5 frontend birim testi, 2 tarayıcı akışı, lint/tip/build ve güvenlik kontrollerini geçti.
 Yerelde servis olmadığı için atlanan 58 PostgreSQL varyantı CI’da geçti.
-Null komisyon alanı uyumluluk düzeltmesinin son CI sonucu ilgili PR üzerinde kaydedilir.
+Tam sıfır komisyon desteğinin son CI sonucu ilgili PR üzerinde kaydedilir.
+Yeni paketin yerel kontrolü: 212 başarılı, 60 PostgreSQL varyantı servis olmadığı
+için atlandı. Ayrı Astra/high incelemesinde açık P1/P2 yok.
 
 Gerçek tarayıcıda BTC/SOL, periyot değişimi, araştırma formu, sanal oturum başlatma/durdurma,
 canlı mod kilidi ve 390×844 mobil menü/durdurma çubuğu kontrol edildi. Deneme paper oturumu durduruldu, açık pozisyon yok.
@@ -41,7 +48,8 @@ Canlı **kapalı**. Eksikler: anahtarlı testnet/borsa doğrulaması, stratejiyl
 giriş ve kesintisiz koruma/izleme entegrasyonu, hesap çapında sahipsiz emir ve reset kurtarma, BNB komisyon muhasebesi, pozisyon içi portföy maksimum düşüşü, 30 takvim günü ileri paper,
 yeterli ekonomik avantaj, üretim operasyon değerlendirmesi. PostgreSQL mantıksal
 kurtarma ve eşzamanlılık CI'da sınanır; fiziksel pg_dump/restore ve Docker testi
-ayrıca gerekir. Kullanıcı canlı para işlemi yetkisi vermedi; geliştirmede borsaya emir gönderilmedi.
+ayrıca gerekir. Kullanıcı canlı para işlemi yetkisi vermedi; yalnız sanal Testnet
+emri gönderilip dolmadan iptal edildi.
 
 Main koruma kuralını kaydetme otomatik onay incelemesince erişim politikası
 değişikliği olarak reddedildi; özel onay sorusu yanıtlanana kadar etkinleştirilmez.

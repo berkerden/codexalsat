@@ -4,8 +4,9 @@ This module is isolated from the paper engine and the HTTP application. Producti
 hard-disabled. There is no strategy-driven trader or UI activation for Testnet. The diagnostic CLI offers
 credential setup, read-only account preflight, local status, and reconciliation. A separate
 explicitly confirmed CLI runs one bounded virtual-funds entry and manages its protection. The transport and OCO lifecycle are exercised with mocked HTTP responses.
-Authenticated exchange execution has **not** been verified. Read-only authenticated account
-and quote preflight passed for BTCUSDT and SOLUSDT on 2026-10-06 using local credentials.
+An authenticated, bounded BTCUSDT LIMIT submission, timed cancellation and restart reconciliation
+passed on 2026-10-13 without a fill. Actual fills and an exchange-side OCO lifecycle remain
+unverified. Read-only authenticated account and quote preflight passed for BTCUSDT and SOLUSDT.
 
 ## Local credential setup
 
@@ -25,12 +26,14 @@ with owner-only permissions (600); this file is **not encrypted**. The backend C
 for that invocation. Existing files are never overwritten; loading rejects symbolic links or
 files accessible to other local users. Keep the computer account and disk protected. An external
 secret manager can instead inject `SPOTLAB_TESTNET_API_KEY` and `SPOTLAB_TESTNET_API_SECRET`.
-Production `BINANCE_API_KEY` variables are not read. Active third-asset commission discounts
-(such as BNB) block new operations until that fee mode can be accounted for; the tool does not
-change the exchange account setting. Testnet may return an explicit null discount asset, even
-with enabled flags and a zero discount rate. Read-only diagnostics preserve that unknown value;
-an enabled discount with an unknown asset still blocks submissions. Missing or malformed fields
-remain rejected. No balance or credential is printed by preflight.
+Production `BINANCE_API_KEY` variables are not read. Active third-asset or unknown commission
+discount assets block submissions unless a fresh, complete account response proves all twelve
+standard/tax/special maker/taker/buyer/seller rates are exactly zero. This narrow exception applies
+only to the pinned Testnet transport, and is rechecked before actual submissions, including exits.
+A zero discount rate alone is never proof of zero fees. Missing, malformed or nonzero components
+cannot activate the exception. The tool does not change the exchange account setting.
+Testnet may return an explicit null discount asset even with enabled flags; read-only diagnostics
+preserve that unknown value. No balance or credential is printed by preflight.
 A blocked result prints an exception category only; do not enable HTTP debug logging with secrets.
 
 Reconciliation requires an existing durable intent, not an arbitrary exchange account order:
@@ -58,7 +61,11 @@ responses and ledger validation failures preserve UNKNOWN. No mutation is retrie
 reconciliation checks immutable symbol, client ID, quantity, side, order type, price and GTC terms.
 Order and trade identifiers include the symbol, since exchange numeric IDs are not globally unique.
 Authenticated trades are paginated and deduplicated. Base and quote commission are supported;
-third-asset/BNB commission blocks reconciliation rather than guessing its quote value.
+positive third-asset/BNB commission blocks reconciliation rather than guessing its quote value.
+An authenticated fill with exactly zero commission and an explicit null/empty asset uses the
+empty-string ledger marker for no fee denomination, with both base and quote fees zero. Missing
+or malformed asset fields remain rejected; positive fees cannot use this marker. Actual fills
+remain authoritative if exchange fees change after preflight.
 
 ## One OCO reservation
 
@@ -145,7 +152,8 @@ dust disposal or ledger reset is provided.
 
 ## Remaining live blockers
 
-Authenticated Testnet order/failure/restart evidence remains outstanding after read-only preflight.
+Authenticated Testnet fills, OCO protection/exits and failure/restart evidence with exposure remain
+outstanding after the no-fill submission/cancellation/restart smoke test.
 Broader unattended entry selection, UI controls, account-wide orphan/reset recovery, third-asset
 commission pricing and production operations remain unfinished. The paper UI is not wired to
 these adapters. Live authorization, 30 calendar days of forward paper observation, economic
@@ -164,7 +172,20 @@ against PostgreSQL in CI. None of these mock outcomes is an authenticated exchan
 
 On 2026-10-06, signed account and commission queries plus public metadata and quotes passed for
 BTCUSDT and SOLUSDT. No order was submitted. Regression tests cover explicit null discount assets
-and prove that enabled unknown fee assets still prevent any order POST, even at a zero rate.
+and proved that a zero discount rate alone does not permit an order POST.
+
+On 2026-10-09, signed account commission queries for both pairs returned all twelve components
+as exact zero. Signed `POST /api/v3/order/test` with `computeCommissionRates=true` independently
+returned all six order-specific standard/tax/special maker/taker rates as zero. These requests
+validate parameters and return commission information without reaching the matching engine;
+they are not executed trades or proof of OCO lifecycle behavior.
+
+On 2026-10-13, a single BTCUSDT LIMIT entry using the bounded cycle controller reached NEW,
+then CANCELED after its 25-second entry authority expired. The cycle ended NO_FILL with no bot
+inventory, dust or unprotected quantity. A fresh CLI process reconciled the same cycle and
+remained NO_FILL; no second BUY was created. The explicit test cap was 20 virtual USDT.
+No production request was made. This did not exercise a fill, base-fee deduction, OCO creation
+or a filled-position restart. Private order IDs, credentials and ledger files remain outside Git.
 
 Protocol references: [official Testnet REST API](https://github.com/binance/binance-spot-api-docs/blob/master/testnet/rest-api.md)
 and [general information](https://github.com/binance/binance-spot-api-docs/blob/master/testnet/general-info.md).
