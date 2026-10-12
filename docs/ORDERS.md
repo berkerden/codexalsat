@@ -54,7 +54,8 @@ requires a compact stable client ID.
 
 ## Remaining live blockers
 
-There is no evidence of testnet execution in this repository, and none is claimed. Before any live
+Testnet submission, timed cancellation and no-fill restart reconciliation were verified on
+2026-10-13; authenticated fills and OCO execution remain unverified. Before any live
 use, the isolated adapter still needs broader unattended entry/protection orchestration, startup
 reconciliation across all open orders and trades, and authenticated testnet
 evidence for disconnects and exchange maintenance. Production use also requires explicit capital/risk

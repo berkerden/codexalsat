@@ -167,6 +167,8 @@ class AccountSnapshot:
     standard_commission: CommissionRates
     discount: CommissionDiscount | None
     observed_at_ms: int
+    tax_commission: CommissionRates | None = None
+    special_commission: CommissionRates | None = None
 
     def balance(self, asset: str) -> AssetBalance:
         for balance in self.balances:
@@ -224,6 +226,32 @@ def _mapping(value: object, name: str) -> dict[str, Any]:
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise OrderInvariantError(f"testnet {name} must be an object")
     return cast(dict[str, Any], value)
+
+
+def _commission_rates(value: object, name: str) -> CommissionRates:
+    data = _mapping(value, name)
+    return CommissionRates(
+        maker=_response_decimal(data.get("maker"), f"{name} maker"),
+        taker=_response_decimal(data.get("taker"), f"{name} taker"),
+        buyer=_response_decimal(data.get("buyer"), f"{name} buyer"),
+        seller=_response_decimal(data.get("seller"), f"{name} seller"),
+    )
+
+
+def _has_complete_zero_commission(snapshot: AccountSnapshot) -> bool:
+    groups = (
+        snapshot.standard_commission,
+        snapshot.tax_commission,
+        snapshot.special_commission,
+    )
+    return snapshot.discount is not None and all(
+        group is not None
+        and all(
+            rate == 0
+            for rate in (group.maker, group.taker, group.buyer, group.seller)
+        )
+        for group in groups
+    )
 
 
 def _venue_filter(value: object, name: str) -> VenueFilter:
@@ -604,14 +632,18 @@ class BinanceTestnetTransport:
                     _response_decimal(balance.get("free"), "free balance"),
                     _response_decimal(balance.get("locked"), "locked balance"),
                 )
-        standard = _mapping(commission.get("standardCommission"), "standard commission")
         if commission.get("symbol") != self.symbol:
             raise OrderInvariantError("commission symbol does not match transport")
-        rates = CommissionRates(
-            maker=_response_decimal(standard.get("maker"), "maker commission"),
-            taker=_response_decimal(standard.get("taker"), "taker commission"),
-            buyer=_response_decimal(standard.get("buyer"), "buyer commission"),
-            seller=_response_decimal(standard.get("seller"), "seller commission"),
+        rates = _commission_rates(commission.get("standardCommission"), "standard commission")
+        tax_rates = (
+            _commission_rates(commission["taxCommission"], "tax commission")
+            if "taxCommission" in commission
+            else None
+        )
+        special_rates = (
+            _commission_rates(commission["specialCommission"], "special commission")
+            if "specialCommission" in commission
+            else None
         )
         raw_discount = commission.get("discount")
         discount: CommissionDiscount | None = None
@@ -642,7 +674,15 @@ class BinanceTestnetTransport:
             balances.get(asset, AssetBalance(asset, Decimal(0), Decimal(0)))
             for asset in (metadata.base_asset, metadata.quote_asset)
         )
-        return AccountSnapshot(can_trade, ordered, rates, discount, self._clock_ms())
+        return AccountSnapshot(
+            can_trade,
+            ordered,
+            rates,
+            discount,
+            self._clock_ms(),
+            tax_rates,
+            special_rates,
+        )
 
     async def _relevant_filters(self, metadata: SymbolMetadata) -> SymbolMetadata:
         raw = await self.request("GET", "/api/v3/myFilters", {"symbol": self.symbol})
@@ -806,15 +846,15 @@ class BinanceTestnetTransport:
         metadata = await self._relevant_filters(metadata)
         validate_submission_metadata(metadata)
         snapshot = await self.account_snapshot()
-        if order.side == "BUY":
-            if snapshot.discount is None:
-                raise OrderInvariantError("commission discount metadata is missing")
-            if (
-                snapshot.discount.enabled_for_account
-                and snapshot.discount.enabled_for_symbol
-                and snapshot.discount.asset not in {metadata.base_asset, metadata.quote_asset}
-            ):
-                raise OrderError("third-asset commission discount is unsafe for new entry")
+        if snapshot.discount is None:
+            raise OrderInvariantError("commission discount metadata is missing")
+        if (
+            snapshot.discount.enabled_for_account
+            and snapshot.discount.enabled_for_symbol
+            and snapshot.discount.asset not in {metadata.base_asset, metadata.quote_asset}
+            and not _has_complete_zero_commission(snapshot)
+        ):
+            raise OrderError("third-asset commission discount is unsafe for submission")
         open_orders = await self._open_orders()
         reference, average, average_mins, last = await self._dynamic_prices(
             metadata, future or order
@@ -1047,12 +1087,21 @@ class BinanceTestnetTransport:
                     trade.get("quoteQty"), "trade quote quantity", allow_zero=False
                 )
                 commission = _response_decimal(trade.get("commission"), "trade commission")
-                commission_asset = trade.get("commissionAsset")
+                if "commissionAsset" not in trade:
+                    raise OrderInvariantError("trade commission metadata is unavailable")
+                commission_asset = trade["commissionAsset"]
                 metadata = self._metadata
-                if metadata is None or not isinstance(commission_asset, str):
+                if metadata is None:
                     raise OrderInvariantError("trade commission metadata is unavailable")
                 fee_base = Decimal(0)
-                if commission_asset == metadata.quote_asset:
+                if commission_asset is None or commission_asset == "":
+                    if commission != 0:
+                        raise OrderInvariantError("trade commission uses an unsupported asset")
+                    commission_asset = ""
+                    fee_quote = Decimal(0)
+                elif not isinstance(commission_asset, str):
+                    raise OrderInvariantError("trade commission metadata is unavailable")
+                elif commission_asset == metadata.quote_asset:
                     fee_quote = commission
                 elif commission_asset == metadata.base_asset:
                     fee_base = commission

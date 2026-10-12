@@ -575,7 +575,10 @@ class OrderStore:
         if not symbol.endswith(quote_asset) or symbol == quote_asset:
             raise OrderInvariantError("symbol does not identify a supported base asset")
         base_asset = symbol[: -len(quote_asset)]
-        if fill.fee_asset == quote_asset:
+        if fill.fee_asset == "":
+            if fill.fee_quote != ZERO or fill.fee_base != ZERO:
+                raise OrderInvariantError("zero-fee marker cannot include a fee")
+        elif fill.fee_asset == quote_asset:
             if fill.fee_base != ZERO:
                 raise OrderInvariantError("quote-asset fee cannot include a base fee")
         elif fill.fee_asset == base_asset:

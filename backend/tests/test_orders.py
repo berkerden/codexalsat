@@ -461,6 +461,48 @@ def test_base_asset_fee_requires_matching_quote_valuation(database_url: str) -> 
         )
 
 
+def test_zero_fee_marker_is_durable_and_idempotent_across_restart(tmp_path: Path) -> None:
+    database_url = "sqlite:///" + str(tmp_path / "zero-fee.sqlite")
+    store = OrderStore(database_url)
+    request = order(quantity="1")
+    store.create_or_get(request)
+    event = update(
+        request,
+        OrderState.FILLED,
+        "1",
+        (ConfirmedFill("zero-fee", D("1"), D("100"), D("0"), "", D("0")),),
+    )
+
+    store.apply_update(request.intent_id, event)
+    restarted = OrderStore(database_url)
+    replay = restarted.apply_update(request.intent_id, event)
+
+    assert replay.confirmed_quantity == D("1")
+    assert replay.confirmed_fee_quote == D("0")
+    assert restarted.available_inventory("run-1", "BTCUSDT") == D("1")
+
+
+@pytest.mark.parametrize(
+    ("fee_quote", "fee_base"),
+    [(D("0.1"), D("0")), (D("0"), D("0.001"))],
+)
+def test_zero_fee_marker_rejects_any_positive_fee(
+    database_url: str, fee_quote: D, fee_base: D
+) -> None:
+    store = OrderStore(database_url)
+    request = order(quantity="1")
+    store.create_or_get(request)
+    malformed = ConfirmedFill("bad-zero-marker", D("1"), D("100"), fee_quote, "", fee_base)
+
+    with pytest.raises(OrderInvariantError, match="zero-fee marker"):
+        store.apply_update(
+            request.intent_id,
+            update(request, OrderState.FILLED, "1", (malformed,)),
+        )
+
+    assert store.get(request.intent_id).confirmed_quantity == D("0")
+
+
 def test_list_records_can_filter_inventory_scope_and_symbol(database_url: str) -> None:
     store = OrderStore(database_url)
     btc = order()

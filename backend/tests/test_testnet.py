@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+from dataclasses import replace
 from decimal import Decimal as D
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -9,7 +10,9 @@ import pytest
 from pydantic import SecretStr
 
 from spotlab.orders import (
+    ConfirmedFill,
     ExchangeFilters,
+    ExchangeUpdate,
     OrderInvariantError,
     OrderLifecycle,
     OrderRequest,
@@ -101,6 +104,22 @@ def commission() -> dict[str, object]:
             "enabledForSymbol": False,
             "discountAsset": "BNB",
             "discount": "0.25",
+        },
+    }
+
+
+def zero_commission(discount_asset: object = None) -> dict[str, object]:
+    rates = {"maker": "0", "taker": "0", "buyer": "0", "seller": "0"}
+    return {
+        "symbol": "BTCUSDT",
+        "standardCommission": dict(rates),
+        "taxCommission": dict(rates),
+        "specialCommission": dict(rates),
+        "discount": {
+            "enabledForAccount": True,
+            "enabledForSymbol": True,
+            "discountAsset": discount_asset,
+            "discount": "0",
         },
     }
 
@@ -761,6 +780,284 @@ async def test_malformed_or_missing_discount_asset_remains_rejected(bad_asset):
     ) as transport:
         with pytest.raises(OrderInvariantError, match="discount asset"):
             await transport.account_snapshot()
+
+
+@pytest.mark.asyncio
+async def test_complete_zero_commission_allows_enabled_unknown_discount_asset() -> None:
+    posts = 0
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        nonlocal posts
+        if http_request.url.path == "/api/v3/account/commission":
+            return httpx.Response(200, json=zero_commission())
+        basic = response_for_basics(http_request)
+        if basic is not None:
+            return basic
+        if http_request.url.path == "/api/v3/order":
+            posts += 1
+            return httpx.Response(200, json=order_response("spotlab-safe-id"))
+        if http_request.url.path == "/api/v3/myTrades":
+            return httpx.Response(200, json=[])
+        raise AssertionError(http_request.url.path)
+
+    async with BinanceTestnetTransport(
+        "BTCUSDT",
+        credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler),
+        clock_ms=lambda: NOW,
+    ) as transport:
+        snapshot = await transport.account_snapshot()
+        assert snapshot.tax_commission is not None
+        assert snapshot.special_commission is not None
+        assert snapshot.discount is not None
+        assert snapshot.discount.asset is None
+        assert (await transport.submit(request())).status is OrderState.NEW
+    assert posts == 1
+
+
+COMMISSION_RATE_FIELDS = tuple(
+    (group, rate)
+    for group in ("standardCommission", "taxCommission", "specialCommission")
+    for rate in ("maker", "taker", "buyer", "seller")
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("group", "rate_name"), COMMISSION_RATE_FIELDS)
+@pytest.mark.parametrize("fault", ["nonzero", "missing", "malformed"])
+async def test_each_commission_rate_must_be_present_valid_and_zero_for_exception(
+    group: str, rate_name: str, fault: str
+) -> None:
+    posts = 0
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        nonlocal posts
+        if http_request.url.path == "/api/v3/account/commission":
+            data = zero_commission("BNB")
+            rates = data[group]
+            assert isinstance(rates, dict)
+            if fault == "missing":
+                del rates[rate_name]
+            else:
+                rates[rate_name] = "0.001" if fault == "nonzero" else True
+            return httpx.Response(200, json=data)
+        basic = response_for_basics(http_request)
+        if basic is not None:
+            return basic
+        if http_request.url.path == "/api/v3/order":
+            posts += 1
+            return httpx.Response(200, json=order_response("spotlab-safe-id"))
+        raise AssertionError(http_request.url.path)
+
+    async with BinanceTestnetTransport(
+        "BTCUSDT",
+        credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler),
+        clock_ms=lambda: NOW,
+    ) as transport:
+        with pytest.raises(ValueError):
+            await transport.submit(request())
+    assert posts == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("order_type", ["LIMIT", "OCO"])
+async def test_enabled_unsafe_discount_is_blocked_for_sell_and_oco(order_type: str) -> None:
+    mutations: list[str] = []
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        if http_request.method != "GET":
+            mutations.append(http_request.url.path)
+        if http_request.url.path == "/api/v3/exchangeInfo":
+            data = exchange_info()
+            if order_type == "OCO":
+                symbol = data["symbols"][0]  # type: ignore[index]
+                symbol["orderTypes"] += ["LIMIT_MAKER", "STOP_LOSS"]  # type: ignore[index]
+            return httpx.Response(200, json=data)
+        if http_request.url.path == "/api/v3/account/commission":
+            data = commission()
+            discount = data["discount"]
+            assert isinstance(discount, dict)
+            discount["enabledForAccount"] = True
+            discount["enabledForSymbol"] = True
+            return httpx.Response(200, json=data)
+        if http_request.url.path == "/api/v3/ticker/price":
+            return httpx.Response(200, json={"symbol": "BTCUSDT", "price": "1000"})
+        basic = response_for_basics(http_request)
+        assert basic is not None
+        return basic
+
+    sell = replace(
+        request("sell-fee-safety"),
+        side="SELL",
+        order_type=order_type,
+        price=D("1100") if order_type == "OCO" else D("1000"),
+    )
+    async with BinanceTestnetTransport(
+        "BTCUSDT",
+        credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler),
+        clock_ms=lambda: NOW,
+    ) as transport:
+        with pytest.raises(ValueError, match="discount"):
+            await transport.prepare_submission(
+                sell, stop_price=D("900") if order_type == "OCO" else None
+            )
+    assert mutations == []
+
+
+@pytest.mark.asyncio
+async def test_final_submit_preflight_rejects_fresh_nonzero_commission_before_post() -> None:
+    commission_calls = 0
+    posts = 0
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        nonlocal commission_calls, posts
+        if http_request.url.path == "/api/v3/account/commission":
+            commission_calls += 1
+            data = zero_commission()
+            if commission_calls == 2:
+                standard = data["standardCommission"]
+                assert isinstance(standard, dict)
+                standard["seller"] = "0.001"
+            return httpx.Response(200, json=data)
+        basic = response_for_basics(http_request)
+        if basic is not None:
+            return basic
+        if http_request.url.path == "/api/v3/order":
+            posts += 1
+            return httpx.Response(200, json=order_response("spotlab-safe-id"))
+        raise AssertionError(http_request.url.path)
+
+    async with BinanceTestnetTransport(
+        "BTCUSDT",
+        credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler),
+        clock_ms=lambda: NOW,
+    ) as transport:
+        await transport.prepare_submission(request())
+        with pytest.raises(ValueError, match="discount"):
+            await transport.submit(request())
+    assert commission_calls == 2
+    assert posts == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("commission_asset", [None, ""])
+async def test_zero_commission_without_asset_replays_across_restart(
+    tmp_path: Path, commission_asset: object
+) -> None:
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        basic = response_for_basics(http_request)
+        if basic is not None:
+            return basic
+        if http_request.url.path == "/api/v3/order":
+            return httpx.Response(
+                200,
+                json=order_response(
+                    "spotlab-safe-id", status="FILLED", executed="0.010"
+                ),
+            )
+        if http_request.url.path == "/api/v3/myTrades":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "symbol": "BTCUSDT",
+                        "id": 81,
+                        "orderId": 42,
+                        "price": "1000.00",
+                        "qty": "0.010",
+                        "quoteQty": "10.00",
+                        "commission": "0",
+                        "commissionAsset": commission_asset,
+                    }
+                ],
+            )
+        raise AssertionError(http_request.url.path)
+
+    database_url = "sqlite:///" + str(tmp_path / f"zero-{commission_asset!r}.sqlite")
+    async with BinanceTestnetTransport(
+        "BTCUSDT",
+        credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler),
+        clock_ms=lambda: NOW,
+    ) as transport:
+        lifecycle = OrderLifecycle(database_url, transport)
+        lifecycle.store.create_or_get(request())
+        first = await lifecycle.reconcile("intent-1")
+        restarted = OrderLifecycle(database_url, transport)
+        replay = await restarted.reconcile("intent-1")
+        assert first.state is OrderState.FILLED
+        assert replay.confirmed_quantity == D("0.010")
+        assert restarted.store.available_inventory("scope-1", "BTCUSDT") == D("0.010")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("commission_asset", [None, "", "BNB"])
+async def test_positive_unsupported_commission_marks_unknown_and_keeps_sell_reserved(
+    tmp_path: Path, commission_asset: object
+) -> None:
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        basic = response_for_basics(http_request)
+        if basic is not None:
+            return basic
+        if http_request.url.path == "/api/v3/order":
+            data = order_response(
+                "sell-positive-unsupported", status="FILLED", executed="0.005", quantity="0.005"
+            )
+            data["side"] = "SELL"
+            return httpx.Response(200, json=data)
+        if http_request.url.path == "/api/v3/myTrades":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "symbol": "BTCUSDT",
+                        "id": 82,
+                        "orderId": 42,
+                        "price": "1000.00",
+                        "qty": "0.005",
+                        "quoteQty": "5.00",
+                        "commission": "0.001",
+                        "commissionAsset": commission_asset,
+                    }
+                ],
+            )
+        raise AssertionError(http_request.url.path)
+
+    database_url = "sqlite:///" + str(tmp_path / f"positive-{commission_asset!r}.sqlite")
+    async with BinanceTestnetTransport(
+        "BTCUSDT",
+        credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler),
+        clock_ms=lambda: NOW,
+    ) as transport:
+        lifecycle = OrderLifecycle(database_url, transport)
+        buy = request("buy-owned")
+        lifecycle.store.create_or_get(buy)
+        lifecycle.store.apply_update(
+            buy.intent_id,
+            ExchangeUpdate(
+                buy.client_order_id,
+                "BTCUSDT:41",
+                OrderState.FILLED,
+                buy.quantity,
+                (ConfirmedFill("BTCUSDT:80", buy.quantity, D("10"), D("0"), "USDT"),),
+            ),
+        )
+        sell = replace(
+            request("sell-positive-unsupported"),
+            intent_id="sell-intent",
+            side="SELL",
+            quantity=D("0.005"),
+        )
+        lifecycle.store.create_or_get(sell)
+        assert lifecycle.store.available_inventory("scope-1", "BTCUSDT") == D("0.005")
+        with pytest.raises(OrderInvariantError, match="commission"):
+            await lifecycle.reconcile(sell.intent_id)
+        assert lifecycle.store.get(sell.intent_id).state is OrderState.UNKNOWN
+        assert lifecycle.store.available_inventory("scope-1", "BTCUSDT") == D("0.005")
 
 
 @pytest.mark.asyncio

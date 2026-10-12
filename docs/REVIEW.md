@@ -79,3 +79,18 @@ olmadığından atlandı. İncelenen sınırlı testnet kapsamında açık P1/P2
 Ana ajanın tüm yerel paketi: 157 başarılı, 58 PostgreSQL varyantı atlandı; bunlar
 CI’da çalıştırılır. Gerçek hesap anahtarı, imzalı hesap denemesi veya gerçek Testnet
 emri kullanılmadı. Üretim onayı ve strateji başarısı iddia edilmez.
+
+## Tam sıfır komisyon kanıtı — 13 Ekim 2026
+
+Sol/high uygulaması sonrası ayrı Astra/high bağlamı gerçek kaynak farkını ve
+testleri inceledi. Standart/vergi/özel komisyonun on iki oranı eksiksiz ve tam
+sıfır olmadıkça bilinmeyen etkin indirim varlığı istisnası açılmaz. Sıfır indirim
+oranı tek başına yeterli değildir. Son gönderim ön kontrolü BUY, SELL ve OCO için
+yenilenir. Gerçekleşmiş sıfır ücretin boş varlık işareti hem taban hem karşılık
+ücretinin sıfır olmasını gerektirir; pozitif desteklenmeyen ücret UNKNOWN ve
+envanter rezervini korur.
+
+Bağımsız hedefli test: 122 başarılı, yerel PostgreSQL olmadığı için 31 atlandı.
+Kapsam içinde açık P1/P2 bulunmadı. Ana ajan tam yerel paket: 212 başarılı,
+60 PostgreSQL varyantı atlandı; lint ve strict tip kontrolü başarılı. CI sonucu
+ilgili PR üzerinde kaydedilir. Bu inceleme üretim kullanım onayı değildir.
