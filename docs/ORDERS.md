@@ -56,7 +56,9 @@ requires a compact stable client ID.
 
 Testnet submission, timed cancellation and no-fill restart reconciliation were verified on
 2026-10-13. A second bounded trial confirmed an entry fill, OCO creation and both open children,
-plus restart observation without another BUY. A closing fill remains pending. Before any live
+plus restart observation without another BUY. On 2026-10-17, authenticated queries confirmed the
+stop filled and the target expired, leaving the cycle EXITED with zero inventory and dust.
+Fresh-process reconciliation preserved that result without duplicate intents or fills. Before any live
 use, the isolated adapter still needs broader unattended entry/protection orchestration, startup
 reconciliation across all open orders and trades, and authenticated testnet
 evidence for disconnects and exchange maintenance. Production use also requires explicit capital/risk

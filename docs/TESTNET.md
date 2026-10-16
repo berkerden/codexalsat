@@ -7,7 +7,10 @@ explicitly confirmed CLI runs one bounded virtual-funds entry and manages its pr
 An authenticated, bounded BTCUSDT LIMIT submission, timed cancellation and restart reconciliation
 passed on 2026-10-13 without a fill. A second bounded BTCUSDT trial filled its entry and installed
 an exchange-side OCO; both children were verified open. A fresh manager process resumed protection
-observation without another BUY. Read-only authenticated preflight passed for BTCUSDT and SOLUSDT.
+observation without another BUY. On 2026-10-17, authenticated reconciliation confirmed the stop
+filled and the target expired; the cycle was EXITED with no remaining inventory or dust. A fresh
+process repeated reconciliation without adding intents or fills. Read-only authenticated preflight
+passed for BTCUSDT and SOLUSDT.
 
 ## Local credential setup
 
@@ -194,7 +197,13 @@ and zero fees, and created one OCO parent. Both LIMIT_MAKER target and STOP_LOSS
 queried and confirmed NEW. A new CLI process resumed the same cycle as PROTECTED without a
 second BUY or duplicate protection intent. The bot-owned quantity was fully covered with no
 dust. The explicit cap remained 20 virtual USDT; this was a protocol test, not a strategy result.
-An exchange-confirmed closing fill is still pending for this trial.
+On 2026-10-17, authenticated reconciliation confirmed the closing trade and the OCO parent as
+FILLED. Separate child queries confirmed STOP_LOSS FILLED and LIMIT_MAKER EXPIRED. The cycle
+reached EXITED with zero owned, dust and unprotected quantity; no manager resumption was required.
+A fresh process reconciled the same cycle again, preserving EXITED and unchanged intent/fill
+counts. This date records closure verification, not the execution timestamp. No new BUY or exit
+was submitted during these checks. This completes one virtual entry/protection/exit round trip;
+it does not establish profitability, partial-fill recovery or unattended reliability.
 
 Protocol references: [official Testnet REST API](https://github.com/binance/binance-spot-api-docs/blob/master/testnet/rest-api.md)
 and [general information](https://github.com/binance/binance-spot-api-docs/blob/master/testnet/general-info.md).

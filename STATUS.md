@@ -1,4 +1,4 @@
-# Durum — 2026-10-13
+# Durum — 2026-10-17
 
 Yerel kaynak gerçek `berkerden/codexalsat` clone'udur. Public depo kullanılır.
 PR #3 araştırma/paper sürümünü main’e taşıdı; issue #2 canlı öncesi kalan işleri izler.
@@ -27,7 +27,10 @@ PR #4 testnet temelini, PR #5 süreli alış→OCO çevrimini main’e taşıdı
   13 Ekim’de sınırlı BTC limit emri NEW→CANCELED, çevrim NO_FILL sonucuyla doğrulandı.
   Yeni süreçte aynı çevrim NO_FILL kaldı. İkinci sınırlı denemede BTC alımı doldu,
   hedef/stop OCO emirlerinin ikisi açık doğrulandı. Yeni yönetici süreci ikinci
-  alım açmadan mevcut korumayı izledi.
+  alım açmadan mevcut korumayı izledi. 17 Ekim’de borsadan kapanış doğrulandı:
+  stop emri FILLED, hedef emri EXPIRED; çevrim EXITED ve kalan miktar/toz sıfır.
+  Yeni süreçte tekrar sorgulama aynı sonucu verdi; emir ve dolum sayıları değişmedi.
+  Bu sanal entegrasyon denemesi strateji kârlılığı kanıtı değildir.
 - A7: ayrı Astra bağlamında kritik inceleme ve hedefli tekrar doğrulama yapıldı;
   kapsam içindeki P1 bulguları giderildi. [İnceleme kaydı](docs/REVIEW.md).
 - A8: temiz GitHub clone'unda kurulum, iki sunucunun başlatılması ve supervisor
