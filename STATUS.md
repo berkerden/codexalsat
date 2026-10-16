@@ -1,4 +1,4 @@
-# Durum — 2026-10-13
+# Durum — 2026-10-17
 
 Yerel kaynak gerçek `berkerden/codexalsat` clone'udur. Public depo kullanılır.
 PR #3 araştırma/paper sürümünü main’e taşıdı; issue #2 canlı öncesi kalan işleri izler.
@@ -25,18 +25,21 @@ PR #4 testnet temelini, PR #5 süreli alış→OCO çevrimini main’e taşıdı
   etkin bilinmeyen indirim varlığı emir gönderimini engeller. Bu istisna yalnız
   Testnet içindir; sıfır indirim oranı tek başına yeterli değildir.
   13 Ekim’de sınırlı BTC limit emri NEW→CANCELED, çevrim NO_FILL sonucuyla doğrulandı.
-  Yeni süreçte aynı çevrim NO_FILL kaldı; bot envanteri sıfır. Dolum ve gerçek OCO
-  kurulumu/kapanışı henüz doğrulanmadı.
+  Yeni süreçte aynı çevrim NO_FILL kaldı. İkinci sınırlı denemede BTC alımı doldu,
+  hedef/stop OCO emirlerinin ikisi açık doğrulandı. Yeni yönetici süreci ikinci
+  alım açmadan mevcut korumayı izledi. 17 Ekim’de borsadan kapanış doğrulandı:
+  stop emri FILLED, hedef emri EXPIRED; çevrim EXITED ve kalan miktar/toz sıfır.
+  Yeni süreçte tekrar sorgulama aynı sonucu verdi; emir ve dolum sayıları değişmedi.
+  Bu sanal entegrasyon denemesi strateji kârlılığı kanıtı değildir.
 - A7: ayrı Astra bağlamında kritik inceleme ve hedefli tekrar doğrulama yapıldı;
   kapsam içindeki P1 bulguları giderildi. [İnceleme kaydı](docs/REVIEW.md).
 - A8: temiz GitHub clone'unda kurulum, iki sunucunun başlatılması ve supervisor
   kapanınca iki portun da serbest kalması doğrulandı. Kurtarma testleri ve
   [operasyon](docs/OPERATIONS.md) belgesi mevcut. Docker bu makinede yok.
 
-Main sürümü PR #6 CI’da 222 backend testi (SQLite + PostgreSQL 16),
+Main sürümü PR #7 CI’da 272 backend testi (SQLite + PostgreSQL 16),
 5 frontend birim testi, 2 tarayıcı akışı, lint/tip/build ve güvenlik kontrollerini geçti.
-Yerelde servis olmadığı için atlanan 58 PostgreSQL varyantı CI’da geçti.
-Tam sıfır komisyon desteğinin son CI sonucu ilgili PR üzerinde kaydedilir.
+Yerelde servis olmadığı için atlanan 60 PostgreSQL varyantı CI’da geçti.
 Yeni paketin yerel kontrolü: 212 başarılı, 60 PostgreSQL varyantı servis olmadığı
 için atlandı. Ayrı Astra/high incelemesinde açık P1/P2 yok.
 
@@ -44,12 +47,12 @@ Gerçek tarayıcıda BTC/SOL, periyot değişimi, araştırma formu, sanal oturu
 canlı mod kilidi ve 390×844 mobil menü/durdurma çubuğu kontrol edildi. Deneme paper oturumu durduruldu, açık pozisyon yok.
 Bu kısa kontrol ileri gözlem süresi yerine geçmez.
 
-Canlı **kapalı**. Eksikler: anahtarlı testnet/borsa doğrulaması, stratejiyle sürekli
+Canlı **kapalı**. Eksikler: anahtarlı testnet kısmi dolum/hata senaryoları, stratejiyle sürekli
 giriş ve kesintisiz koruma/izleme entegrasyonu, hesap çapında sahipsiz emir ve reset kurtarma, BNB komisyon muhasebesi, pozisyon içi portföy maksimum düşüşü, 30 takvim günü ileri paper,
 yeterli ekonomik avantaj, üretim operasyon değerlendirmesi. PostgreSQL mantıksal
 kurtarma ve eşzamanlılık CI'da sınanır; fiziksel pg_dump/restore ve Docker testi
 ayrıca gerekir. Kullanıcı canlı para işlemi yetkisi vermedi; yalnız sanal Testnet
-emri gönderilip dolmadan iptal edildi.
+denemeleri yürütüldü; üretim bağlantısı kullanılmadı.
 
 Main koruma kuralını kaydetme otomatik onay incelemesince erişim politikası
 değişikliği olarak reddedildi; özel onay sorusu yanıtlanana kadar etkinleştirilmez.
