@@ -11,6 +11,8 @@ observation without another BUY. On 2026-10-17, authenticated reconciliation con
 filled and the target expired; the cycle was EXITED with no remaining inventory or dust. A fresh
 process repeated reconciliation without adding intents or fills. Read-only authenticated preflight
 passed for BTCUSDT and SOLUSDT.
+On 2026-10-17, another bounded entry verified recovery after locally discarding accepted BUY
+and cancellation responses, with a fresh process after each interruption. It ended NO_FILL.
 
 ## Local credential setup
 
@@ -157,7 +159,8 @@ dust disposal or ledger reset is provided.
 ## Remaining live blockers
 
 Authenticated Testnet partial-fill and adverse failure scenarios remain outstanding, including
-disconnects during submission/cancellation, missing child observations and venue resets. Successful
+actual network disconnects during submission/cancellation, missing child observations and venue resets.
+The controlled accepted-response discard below verifies a narrower interruption boundary. Successful
 bounded trials do not establish unattended or production reliability.
 Broader unattended entry selection, UI controls, account-wide orphan/reset recovery, third-asset
 commission pricing and production operations remain unfinished. The paper UI is not wired to
@@ -204,6 +207,24 @@ A fresh process reconciled the same cycle again, preserving EXITED and unchanged
 counts. This date records closure verification, not the execution timestamp. No new BUY or exit
 was submitted during these checks. This completes one virtual entry/protection/exit round trip;
 it does not establish profitability, partial-fill recovery or unattended reliability.
+
+On 2026-10-17, one additional bounded BTCUSDT entry used a 20 virtual USDT cap and 30-second
+entry authority. A private runner retained the pinned Testnet transport and all normal preflight
+checks. After a successful entry POST returned, it discarded that response locally and raised a
+process-interruption exception before order parsing. The lifecycle persisted UNKNOWN; the runner
+persisted stop-entry before ending. A fresh, unmodified read-only manager queried the same order
+and found NEW without another BUY. A separate process then canceled that same entry and discarded
+the successful DELETE response at the same boundary. UNKNOWN and cancel_requested were durable.
+A fresh normal manager reconciled CANCELED/NO_FILL with zero inventory, dust and unprotected
+quantity. Subsequent replay preserved one intent and zero fills; a guarded replay allowing ordinary
+management confirmed no mutating request was attempted. No OCO was needed in this no-fill trial.
+
+This was an intentionally discarded accepted response and process interruption, not an actual
+socket failure or exchange outage. The local runner, trace and identifiers remain outside Git.
+No runtime fault-injection option was added to the application. The stateful MockTransport tests
+exercise the real transport/parser and durable controller with query outages, partial fills,
+late cancellation fills, delayed trade details, net base-fee sizing and ambiguous OCO recovery.
+Those deterministic partial-fill outcomes are simulated evidence, not authenticated exchange fills.
 
 Protocol references: [official Testnet REST API](https://github.com/binance/binance-spot-api-docs/blob/master/testnet/rest-api.md)
 and [general information](https://github.com/binance/binance-spot-api-docs/blob/master/testnet/general-info.md).

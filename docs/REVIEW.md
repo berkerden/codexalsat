@@ -94,3 +94,21 @@ Bağımsız hedefli test: 122 başarılı, yerel PostgreSQL olmadığı için 31
 Kapsam içinde açık P1/P2 bulunmadı. Ana ajan tam yerel paket: 212 başarılı,
 60 PostgreSQL varyantı atlandı; lint ve strict tip kontrolü başarılı. CI sonucu
 ilgili PR üzerinde kaydedilir. Bu inceleme üretim kullanım onayı değildir.
+
+## Yanıt kaybı ve kısmi dolum kurtarması — 17 Ekim 2026
+
+Sol/high, gerçek Testnet taşıyıcısı ve kalıcı denetleyici üzerinden durum tutan
+MockTransport testleri ekledi. Ayrı Astra/high bağlamı kaynak farkını, ilgili
+emir/koruma akışlarını ve testleri inceledi. P2 test verisi bulgusu düzeltildi:
+iptal edilmiş kısmi emir örneğinde toplam dolum artık orijinal miktardan küçüktür.
+İki 0,2 dolum ve toplam 0,0004 taban komisyon, 0,3996 net miktar; 0,399 koruma
+ve 0,0006 toz üretir. Eksik işlem ayrıntıları tamamlanmadan koruma gönderilmez.
+
+Son bağımsız çevrim paketi: 24 başarılı; yerel PostgreSQL servisi olmadığı için
+24 varyant atlandı ve CI'a bırakıldı. Açık P1/P2 yok. BUY/iptal/OCO yanıt kaybı,
+ardından sorgu hatası ve yeni taşıyıcı/yöneticiyle kurtarma; tek gönderim, kalıcı
+iptal talebi, komisyon ve envanter rezervi kontrol edildi. Uygulama kodu değişmedi.
+Bu testlerde borsa HTTP yanıtları sahtedir; yeni nesneler süreç yeniden başlatmasını
+benzetir. Ayrı anahtarlı deneme, yerelde atılan kabul yanıtlarından gerçek yeni
+süreçlerle NO_FILL kurtarmasını doğruladı; gerçek ağ kesintisi veya anahtarlı
+kısmi dolum kanıtı değildir. [Ayrıntılı kanıt ve sınırlar](TESTNET.md).

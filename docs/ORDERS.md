@@ -65,3 +65,9 @@ evidence for disconnects and exchange maintenance. Production use also requires 
 authorization, independent review, monitoring and emergency controls. The required 30-day forward
 observation cannot be completed within this implementation task and remains an external time-based
 blocker.
+
+A further bounded trial on 2026-10-17 locally discarded accepted BUY and DELETE responses before
+parsing, interrupting the process after each. Durable UNKNOWN and the cancellation claim survived;
+fresh processes queried the same intent and ended CANCELED/NO_FILL with no inventory. Terminal
+replay attempted no network mutation. This controlled interruption is narrower than a real network
+outage; authenticated partial fills and adverse venue/reset recovery remain outstanding.
