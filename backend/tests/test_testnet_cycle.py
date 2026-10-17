@@ -4,9 +4,13 @@ from dataclasses import replace
 from decimal import Decimal as D
 from types import SimpleNamespace
 from typing import cast
+from urllib.parse import parse_qs
 
+import httpx
 import pytest
 from backend.tests.test_orders import database_url as database_url
+from backend.tests.test_testnet import NOW as EXCHANGE_TIME
+from backend.tests.test_testnet import credentials, response_for_basics
 
 from spotlab.orders import (
     ConfirmedFill,
@@ -295,6 +299,460 @@ def test_invalid_or_expired_plan_sends_nothing(setup, changes) -> None:
     with pytest.raises(ValueError):
         asyncio.run(cycle.start(replace(plan(), **changes)))
     assert venue.posts == 0
+
+
+class SimulatedProcessLoss(BaseException):
+    """Stop a controller after the exchange accepted a mutation."""
+
+
+class StatefulTestnetVenue:
+    """Small immutable-order exchange ledger behind a real Testnet transport."""
+
+    def __init__(self, terms: CyclePlan) -> None:
+        self.terms = terms
+        self.entry = terms.entry()
+        self.entry_status = "NEW"
+        self.entry_executed = D(0)
+        self.entry_trades: list[dict[str, object]] = []
+        self.late_trades_visible = True
+        self.oco_quantity: D | None = None
+        self.drop_accepted: set[tuple[str, str]] = set()
+        self.query_outages: set[str] = set()
+        self.cancel_before_accept = False
+        self.entry_posts = 0
+        self.cancel_attempts = 0
+        self.cancel_accepts = 0
+        self.oco_posts = 0
+        self.mutation_payloads: list[tuple[str, str, dict[str, list[str]]]] = []
+
+    @staticmethod
+    def _params(req: httpx.Request) -> dict[str, list[str]]:
+        raw = req.content.decode() if req.method == "POST" else req.url.query.decode()
+        return parse_qs(raw, keep_blank_values=True)
+
+    @staticmethod
+    def _assert_signed(params: dict[str, list[str]], req: httpx.Request) -> None:
+        assert req.url.scheme == "https" and req.url.host == "testnet.binance.vision"
+        assert req.headers["X-MBX-APIKEY"]
+        assert params["recvWindow"] == ["5000"]
+        assert params["timestamp"] == [str(EXCHANGE_TIME)]
+        assert len(params["signature"]) == 1 and len(params["signature"][0]) == 64
+
+    def _accept_or_drop(self, req: httpx.Request) -> None:
+        operation = (req.method, req.url.path)
+        if operation in self.drop_accepted:
+            self.drop_accepted.remove(operation)
+            raise SimulatedProcessLoss(f"process ended after {req.method} acceptance")
+
+    def _entry_reply(self) -> dict[str, object]:
+        return {
+            "symbol": "BTCUSDT",
+            "orderId": 100,
+            "clientOrderId": self.entry.client_order_id,
+            "side": "BUY",
+            "origQty": "0.5",
+            "type": "LIMIT",
+            "price": "100",
+            "timeInForce": "GTC",
+            "status": self.entry_status,
+            "executedQty": str(self.entry_executed),
+        }
+
+    def _oco_child_reply(self, client_id: str) -> dict[str, object]:
+        assert self.oco_quantity is not None
+        protection = self.terms.protection(self.oco_quantity)
+        above = client_id == protection.above_id
+        assert above or client_id == protection.below_id
+        return {
+            "symbol": "BTCUSDT",
+            "orderId": 201 if above else 202,
+            "orderListId": 9,
+            "clientOrderId": client_id,
+            "side": "SELL",
+            "origQty": str(self.oco_quantity),
+            "type": "LIMIT_MAKER" if above else "STOP_LOSS",
+            "price": "110" if above else "0",
+            "stopPrice": "0" if above else "90",
+            "timeInForce": "GTC",
+            "status": "NEW",
+            "executedQty": "0",
+        }
+
+    def __call__(self, req: httpx.Request) -> httpx.Response:
+        basic = response_for_basics(req)
+        if basic is not None:
+            if req.url.path == "/api/v3/exchangeInfo":
+                info = basic.json()
+                info["symbols"][0]["orderTypes"] += ["LIMIT_MAKER", "STOP_LOSS"]
+                return httpx.Response(200, json=info)
+            return basic
+
+        path = req.url.path
+        params = self._params(req)
+        if path in self.query_outages and req.method == "GET":
+            raise httpx.ReadTimeout("temporary query outage", request=req)
+        if path == "/api/v3/ticker/price":
+            assert req.method == "GET" and params == {"symbol": ["BTCUSDT"]}
+            return httpx.Response(200, json={"symbol": "BTCUSDT", "price": "100"})
+        if path == "/api/v3/order" and req.method == "POST":
+            self._assert_signed(params, req)
+            assert params == {
+                "symbol": ["BTCUSDT"],
+                "side": ["BUY"],
+                "type": ["LIMIT"],
+                "timeInForce": ["GTC"],
+                "quantity": ["0.5"],
+                "price": ["100"],
+                "newClientOrderId": [self.entry.client_order_id],
+                "newOrderRespType": ["RESULT"],
+                "recvWindow": ["5000"],
+                "timestamp": [str(EXCHANGE_TIME)],
+                "signature": params["signature"],
+            }
+            self.entry_posts += 1
+            self.mutation_payloads.append((req.method, path, params))
+            self._accept_or_drop(req)
+            return httpx.Response(200, json=self._entry_reply())
+        if path == "/api/v3/order" and req.method == "DELETE":
+            self._assert_signed(params, req)
+            assert params == {
+                "symbol": ["BTCUSDT"],
+                "origClientOrderId": [self.entry.client_order_id],
+                "recvWindow": ["5000"],
+                "timestamp": [str(EXCHANGE_TIME)],
+                "signature": params["signature"],
+            }
+            self.cancel_attempts += 1
+            self.mutation_payloads.append((req.method, path, params))
+            if self.cancel_before_accept:
+                raise httpx.ConnectError("cancel did not reach venue", request=req)
+            self.cancel_accepts += 1
+            self.entry_status = "CANCELED"
+            self.entry_executed = D("0.4")
+            self._accept_or_drop(req)
+            return httpx.Response(200, json=self._entry_reply())
+        if path == "/api/v3/order" and req.method == "GET":
+            self._assert_signed(params, req)
+            client_id = params["origClientOrderId"][0]
+            if client_id == self.entry.client_order_id:
+                return httpx.Response(200, json=self._entry_reply())
+            return httpx.Response(200, json=self._oco_child_reply(client_id))
+        if path == "/api/v3/myTrades":
+            self._assert_signed(params, req)
+            order_id = int(params["orderId"][0])
+            trades = self.entry_trades if order_id == 100 else []
+            if not self.late_trades_visible:
+                trades = trades[:1]
+            return httpx.Response(200, json=trades)
+        if path == "/api/v3/orderList/oco":
+            self._assert_signed(params, req)
+            assert params["symbol"] == ["BTCUSDT"]
+            assert params["side"] == ["SELL"]
+            assert params["abovePrice"] == ["110"]
+            assert params["belowStopPrice"] == ["90"]
+            quantity = D(params["quantity"][0])
+            protection = self.terms.protection(quantity)
+            assert params == {
+                "symbol": ["BTCUSDT"],
+                "side": ["SELL"],
+                "quantity": [str(quantity)],
+                "listClientOrderId": [protection.order.client_order_id],
+                "aboveType": ["LIMIT_MAKER"],
+                "abovePrice": ["110"],
+                "aboveClientOrderId": [protection.above_id],
+                "belowType": ["STOP_LOSS"],
+                "belowStopPrice": ["90"],
+                "belowClientOrderId": [protection.below_id],
+                "newOrderRespType": ["RESULT"],
+                "recvWindow": ["5000"],
+                "timestamp": [str(EXCHANGE_TIME)],
+                "signature": params["signature"],
+            }
+            assert self.oco_quantity in {None, quantity}
+            self.oco_quantity = quantity
+            self.oco_posts += 1
+            self.mutation_payloads.append((req.method, path, params))
+            self._accept_or_drop(req)
+            return httpx.Response(200, json={})
+        if path == "/api/v3/orderList":
+            self._assert_signed(params, req)
+            assert self.oco_quantity is not None
+            protection = self.terms.protection(self.oco_quantity)
+            assert params["origClientOrderId"] == [protection.order.client_order_id]
+            return httpx.Response(
+                200,
+                json={
+                    "symbol": "BTCUSDT",
+                    "orderListId": 9,
+                    "listClientOrderId": protection.order.client_order_id,
+                    "contingencyType": "OCO",
+                    "orders": [
+                        {"symbol": "BTCUSDT", "orderId": 201, "clientOrderId": protection.above_id},
+                        {"symbol": "BTCUSDT", "orderId": 202, "clientOrderId": protection.below_id},
+                    ],
+                },
+            )
+        raise AssertionError(f"unexpected request: {req.method} {path}")
+
+
+def recovery_terms() -> CyclePlan:
+    return replace(plan(), entry_deadline_ms=EXCHANGE_TIME + 60_000)
+
+
+def test_real_transport_lost_accepted_buy_recovers_query_only_after_restart(
+    database_url: str,
+) -> None:
+    terms = recovery_terms()
+    venue = StatefulTestnetVenue(terms)
+    venue.drop_accepted.add(("POST", "/api/v3/order"))
+
+    async def scenario() -> None:
+        async with BinanceTestnetTransport(
+            "BTCUSDT",
+            credentials=credentials(),
+            mock_transport=httpx.MockTransport(venue),
+            clock_ms=lambda: EXCHANGE_TIME,
+        ) as wire:
+            controller = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            with pytest.raises(SimulatedProcessLoss):
+                await controller.start(terms)
+            assert controller.store.get(terms.entry_id).state is OrderState.UNKNOWN
+            venue.query_outages.add("/api/v3/order")
+            assert (await controller.advance("one", allow_mutations=True))["state"] == "BLOCKED"
+            assert controller.store.get(terms.entry_id).state is OrderState.UNKNOWN
+            assert venue.entry_posts == 1
+            controller.store.db.dispose()
+
+        venue.query_outages.clear()
+        async with BinanceTestnetTransport(
+            "BTCUSDT",
+            credentials=credentials(),
+            mock_transport=httpx.MockTransport(venue),
+            clock_ms=lambda: EXCHANGE_TIME,
+        ) as wire:
+            restarted = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            assert (await restarted.advance("one", allow_mutations=True))["state"] == "ENTRY_OPEN"
+            assert (await restarted.advance("one", allow_mutations=True))["state"] == "ENTRY_OPEN"
+            entry = restarted.store.get(terms.entry_id)
+            assert entry.state is OrderState.NEW
+            assert entry.confirmed_quantity == entry.exchange_cumulative_quantity == 0
+            assert venue.entry_posts == 1 and venue.cancel_attempts == venue.oco_posts == 0
+            assert [(method, path) for method, path, _ in venue.mutation_payloads] == [
+                ("POST", "/api/v3/order")
+            ]
+
+    asyncio.run(scenario())
+
+
+def test_real_transport_lost_accepted_cancel_recovers_late_fills_and_net_fee_size(
+    database_url: str,
+) -> None:
+    terms = recovery_terms()
+    venue = StatefulTestnetVenue(terms)
+    entry_trades = [
+        {
+            "symbol": "BTCUSDT",
+            "orderId": 100,
+            "id": 1,
+            "qty": "0.2",
+            "price": "100",
+            "quoteQty": "20",
+            "commission": "0.0002",
+            "commissionAsset": "BTC",
+        },
+        {
+            "symbol": "BTCUSDT",
+            "orderId": 100,
+            "id": 2,
+            "qty": "0.2",
+            "price": "100",
+            "quoteQty": "20",
+            "commission": "0.0002",
+            "commissionAsset": "BTC",
+        },
+    ]
+
+    async def scenario() -> None:
+        async with BinanceTestnetTransport(
+            "BTCUSDT",
+            credentials=credentials(),
+            mock_transport=httpx.MockTransport(venue),
+            clock_ms=lambda: EXCHANGE_TIME,
+        ) as wire:
+            controller = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            assert (await controller.start(terms))["state"] == "ENTRY_OPEN"
+            venue.entry_trades = entry_trades
+            venue.entry_status = "PARTIALLY_FILLED"
+            venue.entry_executed = D("0.2")
+            venue.late_trades_visible = False
+            venue.drop_accepted.add(("DELETE", "/api/v3/order"))
+            with pytest.raises(SimulatedProcessLoss):
+                await controller.advance("one", allow_mutations=True, stop_entry=True)
+            interrupted = controller.store.get(terms.entry_id)
+            assert interrupted.state is OrderState.UNKNOWN
+            assert interrupted.cancel_requested
+            assert interrupted.confirmed_quantity == D("0.2")
+            venue.query_outages.add("/api/v3/order")
+            assert (await controller.advance("one", allow_mutations=True))["state"] == "BLOCKED"
+            assert venue.entry_posts == venue.cancel_attempts == venue.cancel_accepts == 1
+            controller.store.db.dispose()
+
+        venue.query_outages.clear()
+        async with BinanceTestnetTransport(
+            "BTCUSDT",
+            credentials=credentials(),
+            mock_transport=httpx.MockTransport(venue),
+            clock_ms=lambda: EXCHANGE_TIME,
+        ) as wire:
+            restarted = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            incomplete = await restarted.advance("one", allow_mutations=True)
+            assert incomplete["reason"] == "entry_trade_details_incomplete"
+            assert venue.oco_posts == 0
+            assert restarted.store.get(terms.entry_id).exchange_cumulative_quantity == D("0.4")
+            assert (await restarted.advance("one", allow_mutations=True))["reason"] == (
+                "entry_trade_details_incomplete"
+            )
+            venue.late_trades_visible = True
+            protected = await restarted.advance("one", allow_mutations=True)
+            assert protected["state"] == "PROTECTED"
+            gross = D("0.2") + D("0.2")
+            base_fees = D("0.0002") + D("0.0002")
+            assert restarted.store.owned_inventory(terms.scope, "BTCUSDT") == gross - base_fees
+            assert restarted.store.get(terms.entry_id).confirmed_fee_quote == D("0.04")
+            assert restarted.store.get(terms.protection_id).request.quantity == D("0.399")
+            assert D(protected["dust_quantity"]) == gross - base_fees - D("0.399")
+            records_before = restarted.store.list_records()
+            repeated = await restarted.advance("one", allow_mutations=True)
+            assert repeated["state"] == "PROTECTED"
+            assert repeated["dust_quantity"] == protected["dust_quantity"]
+            assert restarted.store.list_records() == records_before
+            assert venue.entry_posts == venue.cancel_attempts == venue.cancel_accepts == 1
+            assert venue.oco_posts == 1
+            assert [(method, path) for method, path, _ in venue.mutation_payloads] == [
+                ("POST", "/api/v3/order"),
+                ("DELETE", "/api/v3/order"),
+                ("POST", "/api/v3/orderList/oco"),
+            ]
+
+    asyncio.run(scenario())
+
+
+def test_real_transport_cancel_not_accepted_is_never_retried(database_url: str) -> None:
+    terms = recovery_terms()
+    venue = StatefulTestnetVenue(terms)
+    partial_trade = [
+        {
+            "symbol": "BTCUSDT",
+            "orderId": 100,
+            "id": 1,
+            "qty": "0.2",
+            "price": "100",
+            "quoteQty": "20",
+            "commission": "0",
+            "commissionAsset": "USDT",
+        }
+    ]
+
+    async def scenario() -> None:
+        async with BinanceTestnetTransport(
+            "BTCUSDT",
+            credentials=credentials(),
+            mock_transport=httpx.MockTransport(venue),
+            clock_ms=lambda: EXCHANGE_TIME,
+        ) as wire:
+            controller = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            assert (await controller.start(terms))["state"] == "ENTRY_OPEN"
+            venue.entry_trades = partial_trade
+            venue.entry_status = "PARTIALLY_FILLED"
+            venue.entry_executed = D("0.2")
+            venue.cancel_before_accept = True
+            settling = await controller.advance("one", allow_mutations=True, stop_entry=True)
+            assert settling["state"] == "ENTRY_SETTLING"
+            assert settling["reason"] == "cancel_pending_query_only"
+            assert controller.store.get(terms.entry_id).cancel_requested
+            assert venue.cancel_attempts == 1 and venue.cancel_accepts == 0
+            controller.store.db.dispose()
+
+        async with BinanceTestnetTransport(
+            "BTCUSDT",
+            credentials=credentials(),
+            mock_transport=httpx.MockTransport(venue),
+            clock_ms=lambda: EXCHANGE_TIME,
+        ) as wire:
+            restarted = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            for _ in range(2):
+                result = await restarted.advance("one", allow_mutations=True)
+                assert result["state"] == "ENTRY_SETTLING"
+                assert result["reason"] == "cancel_pending_query_only"
+            assert venue.cancel_attempts == 1 and venue.cancel_accepts == venue.oco_posts == 0
+            assert [(method, path) for method, path, _ in venue.mutation_payloads] == [
+                ("POST", "/api/v3/order"),
+                ("DELETE", "/api/v3/order"),
+            ]
+
+    asyncio.run(scenario())
+
+
+def test_real_transport_lost_accepted_oco_keeps_one_reservation_across_restart(
+    database_url: str,
+) -> None:
+    terms = recovery_terms()
+    venue = StatefulTestnetVenue(terms)
+    venue.entry_status = "FILLED"
+    venue.entry_executed = D("0.5")
+    venue.entry_trades = [
+        {
+            "symbol": "BTCUSDT",
+            "orderId": 100,
+            "id": 1,
+            "qty": "0.5",
+            "price": "100",
+            "quoteQty": "50",
+            "commission": "0.05",
+            "commissionAsset": "USDT",
+        }
+    ]
+    venue.drop_accepted.add(("POST", "/api/v3/orderList/oco"))
+
+    async def scenario() -> None:
+        async with BinanceTestnetTransport(
+            "BTCUSDT",
+            credentials=credentials(),
+            mock_transport=httpx.MockTransport(venue),
+            clock_ms=lambda: EXCHANGE_TIME,
+        ) as wire:
+            controller = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            with pytest.raises(SimulatedProcessLoss):
+                await controller.start(terms)
+            protection = controller.store.get(terms.protection_id)
+            assert protection.state is OrderState.UNKNOWN
+            assert controller.store.available_inventory(terms.scope, "BTCUSDT") == 0
+            venue.query_outages.add("/api/v3/orderList")
+            assert (await controller.advance("one", allow_mutations=True))["state"] == "BLOCKED"
+            assert venue.entry_posts == venue.oco_posts == 1
+            controller.store.db.dispose()
+
+        venue.query_outages.clear()
+        async with BinanceTestnetTransport(
+            "BTCUSDT",
+            credentials=credentials(),
+            mock_transport=httpx.MockTransport(venue),
+            clock_ms=lambda: EXCHANGE_TIME,
+        ) as wire:
+            restarted = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            assert (await restarted.advance("one", allow_mutations=True))["state"] == "PROTECTED"
+            records = restarted.store.list_records()
+            assert len(records) == 2
+            assert restarted.store.available_inventory(terms.scope, "BTCUSDT") == 0
+            assert (await restarted.advance("one", allow_mutations=True))["state"] == "PROTECTED"
+            assert restarted.store.list_records() == records
+            assert venue.entry_posts == venue.oco_posts == 1 and venue.cancel_attempts == 0
+            assert [(method, path) for method, path, _ in venue.mutation_payloads] == [
+                ("POST", "/api/v3/order"),
+                ("POST", "/api/v3/orderList/oco"),
+            ]
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("lose_oco_reply", [False, True])

@@ -31,17 +31,23 @@ PR #4 testnet temelini, PR #5 süreli alış→OCO çevrimini main’e taşıdı
   stop emri FILLED, hedef emri EXPIRED; çevrim EXITED ve kalan miktar/toz sıfır.
   Yeni süreçte tekrar sorgulama aynı sonucu verdi; emir ve dolum sayıları değişmedi.
   Bu sanal entegrasyon denemesi strateji kârlılığı kanıtı değildir.
+  Aynı gün tek ek sanal girişte kabul edilen alış ve iptal yanıtları yerelde atılıp
+  süreçler kesildi. UNKNOWN kayıtları yeni süreçte sorguyla çözüldü; sonuç NO_FILL,
+  tek niyet ve sıfır dolum. Son tekrar yönetiminde emir gönderimi denenmedi.
+  Gerçek ağ kesintisi veya borsada kısmi dolum doğrulaması iddia edilmez.
 - A7: ayrı Astra bağlamında kritik inceleme ve hedefli tekrar doğrulama yapıldı;
   kapsam içindeki P1 bulguları giderildi. [İnceleme kaydı](docs/REVIEW.md).
 - A8: temiz GitHub clone'unda kurulum, iki sunucunun başlatılması ve supervisor
   kapanınca iki portun da serbest kalması doğrulandı. Kurtarma testleri ve
   [operasyon](docs/OPERATIONS.md) belgesi mevcut. Docker bu makinede yok.
 
-Main sürümü PR #7 CI’da 272 backend testi (SQLite + PostgreSQL 16),
+Önceki ana sürüm PR #8 CI’da 272 backend testi (SQLite + PostgreSQL 16),
 5 frontend birim testi, 2 tarayıcı akışı, lint/tip/build ve güvenlik kontrollerini geçti.
 Yerelde servis olmadığı için atlanan 60 PostgreSQL varyantı CI’da geçti.
-Yeni paketin yerel kontrolü: 212 başarılı, 60 PostgreSQL varyantı servis olmadığı
-için atlandı. Ayrı Astra/high incelemesinde açık P1/P2 yok.
+Önceki uygulama paketinin yerel kontrolü: 212 başarılı, 60 PostgreSQL varyantı servis olmadığı
+için atlandı. 17 Ekim kurtarma paketinin bağımsız çevrim kontrolünde 24 test geçti,
+24 PostgreSQL varyantı yerel servis olmadığı için atlandı; CI sonucu ilgili PR'dadır.
+Ayrı Astra/high incelemesinde açık P1/P2 yok.
 
 Gerçek tarayıcıda BTC/SOL, periyot değişimi, araştırma formu, sanal oturum başlatma/durdurma,
 canlı mod kilidi ve 390×844 mobil menü/durdurma çubuğu kontrol edildi. Deneme paper oturumu durduruldu, açık pozisyon yok.
