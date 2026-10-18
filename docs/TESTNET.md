@@ -70,8 +70,10 @@ a matching remote order always blocks another submission. A missing open order n
 cancellation. Unrelated untracked orders remain untouched and still count in venue capacity
 checks; their manual or automated provenance is not inferred.
 
-The audit does not submit, cancel, adopt or erase exchange orders. Existing-entry reconciliation,
-cancellation and protective exits remain available while new entry is blocked. Use the original
+The audit does not submit, cancel, adopt or erase exchange orders. On a verified bound account,
+existing-entry reconciliation, cancellation and protective exits remain available while the
+open-order audit blocks new entry. An unverified or different account blocks these operations too:
+the application's old inventory cannot authorize a sale on another account. Use the original
 cycle/intent and ledger to investigate; do not delete records or invent replacement identifiers
 to bypass a blocker. The final audit is followed by the entry deadline and persistent stop checks.
 Preflight age/clock drift and account-wide capacity observations are checked again after the
@@ -81,10 +83,65 @@ manager closes that local attempt as ABORTED without querying a nonexistent exch
 Any original audit blocker still has to clear before a new entry can pass its own checks.
 
 This is a point-in-time open-order/ledger comparison, not complete historical account or trade
-reconciliation. The ledger is not yet bound to an exchange account identity. An empty snapshot
-cannot prove that the correct account was selected or that a Testnet reset was reconciled.
-Arbitrary untracked client IDs cannot reliably be attributed to this app. Orphan/reset recovery,
-account binding and continuous unattended monitoring remain separate work.
+reconciliation. Account binding establishes the observed account identity, not a reset generation.
+An empty snapshot cannot prove that a Testnet reset was reconciled. Arbitrary untracked client IDs
+cannot reliably be attributed to this app. Legacy-ledger migration, orphan/reset recovery and
+continuous unattended monitoring remain separate work.
+
+## Account binding and reset boundaries
+
+The ledger's account binding is immutable and uses the fixed Spot Testnet venue and the positive
+integer `uid` returned by the signed [account endpoint](https://github.com/binance/binance-spot-api-docs/blob/master/testnet/rest-api.md#account-information-user_data).
+API keys are not account identifiers: rotating credentials for the same UID does not require
+replacing the binding. UID values remain in the local database and are not diagnostic output.
+
+Initial binding is permitted only when the ledger contains no orders, fills, protection payloads
+or cycles. The check and binding write share the ledger writer lock. A historical ledger without
+a binding requires migration; a successful account request alone cannot establish that those
+old records belong to the currently selected account. Existing ledgers from earlier versions must
+be preserved, including closed cycles. Do not erase them, create replacement identifiers or choose
+a fresh database to work around this blocker. Verified historical migration is not yet implemented.
+
+Account identity must be verified before order queries, submissions, cancellations and OCO
+management. Missing or malformed identity, account-query failure and UID mismatch fail closed.
+Local status and account preflight remain available for inspection. Successful binding does not
+authorize trading or restore an expired entry deadline.
+
+For an initial installation with an empty ledger, explicitly record the observed account:
+
+```bash
+.venv/bin/python -m spotlab.testnet_cli bind-account --confirm-testnet
+.venv/bin/python -m spotlab.testnet_cli audit
+```
+
+`bind-account` writes only the local binding and sends no exchange order. Repeating it with the
+same bound account is idempotent; a different account cannot replace the binding. It is not the
+migration procedure for a historical unbound ledger.
+
+The [official Testnet reset FAQ](https://github.com/binance/binance-spot-api-docs/blob/master/testnet/general-info.md#all-my-data-has-disappeared-what-happened)
+states that resets remove pending and executed orders, replenish virtual balances and preserve API
+keys. Therefore an unchanged key or UID is not reset-resolution evidence. Missing historical
+orders must not be converted into cancellations, zero inventory or permission to replace an order.
+No automatic rebind, incident clearance, inventory write-off or reset adoption is provided.
+
+When a query reports `-2013` for an order/list previously acknowledged in the ledger,
+`account_history_missing` is latched persistently. It blocks **all order mutations**, including
+cancellation and new protection, before their local claims are created. Verified read-only queries
+remain available; later successful queries do not automatically clear the incident. Existing
+exchange-side orders are not canceled by this local block. A temporarily absent unacknowledged
+submission remains query-only without this history-loss latch, so later confirmed fills can still
+receive protection after their ambiguity is resolved.
+
+Account verification happens before local lifecycle transitions and again at the HTTP boundary.
+An attached transport cannot be reassigned to another store object. Time, preflight freshness and
+entry authority are checked after the last awaited identity call. An OCO claim proven unsent due
+to this last freshness check may return to INTENDED with the same payload and reservation;
+ambiguous or acknowledged submissions never take that retry path.
+
+On 2026-10-18, the existing authenticated local ledger correctly returned `migration_required`.
+Its historical order, fill, protection and cycle rows were compared before and after and remained
+unchanged. No exchange order was submitted or canceled, and no binding was assigned to that legacy
+ledger. Historical migration is the next required step before its Testnet order operations resume.
 
 ## Transport and identity
 

@@ -10,6 +10,7 @@ import pytest
 from pydantic import SecretStr
 
 from spotlab.orders import (
+    TESTNET_ACCOUNT_VENUE,
     ConfirmedFill,
     ExchangeFilters,
     ExchangeUpdate,
@@ -17,6 +18,7 @@ from spotlab.orders import (
     OrderLifecycle,
     OrderRequest,
     OrderState,
+    OrderStore,
     RetryableTransportError,
     SubmissionPrevented,
 )
@@ -36,6 +38,14 @@ from spotlab.testnet import (
 NOW = 1_700_000_000_000
 SECRET = "fixture-secret"
 KEY = "test-api-key-that-must-never-leak"
+
+
+def bind_transport(transport, store=None):
+    """Seed an explicit fixture binding; real identity verification still runs."""
+    store = store or OrderStore("sqlite:///:memory:", recover_submitting=False)
+    store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
+    transport.attach_order_store(store)
+    return store
 
 
 def credentials() -> Credentials:
@@ -81,6 +91,7 @@ def exchange_info() -> dict[str, object]:
 
 def account() -> dict[str, object]:
     return {
+        "uid": 12345,
         "canTrade": True,
         "balances": [
             {"asset": "BTC", "free": "5.0", "locked": "0.0"},
@@ -210,6 +221,9 @@ async def test_request_is_fixed_host_signed_once_and_client_is_internal() -> Non
     seen: list[httpx.Request] = []
 
     async def handler(http_request: httpx.Request) -> httpx.Response:
+        basic = response_for_basics(http_request)
+        if basic is not None:
+            return basic
         seen.append(http_request)
         return httpx.Response(200, json={})
 
@@ -219,6 +233,7 @@ async def test_request_is_fixed_host_signed_once_and_client_is_internal() -> Non
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: NOW,
     )
+    bind_transport(transport)
     await transport.request("POST", "/api/v3/order/test", {"symbol": "BTCUSDT", "memo": "a/b c"})
     await transport.aclose()
     assert len(seen) == 1
@@ -259,21 +274,28 @@ async def test_submit_runs_fresh_filter_account_and_commission_preflight() -> No
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: NOW,
     )
+    bind_transport(transport)
     result = await transport.submit(request())
     snapshot = await transport.account_snapshot()
     await transport.aclose()
     assert result.status is OrderState.NEW
     assert result.exchange_order_id == "BTCUSDT:42"
     assert [balance.asset for balance in snapshot.balances] == ["BTC", "USDT"]
-    assert paths[:9] == [
+    assert paths[:15] == [
         "/api/v3/time",
         "/api/v3/exchangeInfo",
         "/api/v3/myFilters",
         "/api/v3/time",
         "/api/v3/account",
         "/api/v3/account/commission",
+        "/api/v3/time",
+        "/api/v3/account",
         "/api/v3/openOrders",
+        "/api/v3/time",
+        "/api/v3/account",
         "/api/v3/order",
+        "/api/v3/time",
+        "/api/v3/account",
         "/api/v3/myTrades",
     ]
 
@@ -299,6 +321,7 @@ async def test_submit_timeout_is_never_resent_by_lifecycle(tmp_path: Path) -> No
         clock_ms=lambda: NOW,
     )
     lifecycle = OrderLifecycle("sqlite:///" + str(tmp_path / "orders.sqlite"), transport)
+    lifecycle.store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
     first = await lifecycle.submit(request(), local_filters())
     second = await lifecycle.submit(request(), local_filters())
     await transport.aclose()
@@ -343,6 +366,7 @@ async def test_fresh_transport_restart_query_loads_metadata_and_base_fee() -> No
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: NOW,
     )
+    bind_transport(transport)
     result = await transport.query("spotlab-safe-id")
     await transport.aclose()
     assert result.status is OrderState.FILLED
@@ -374,6 +398,7 @@ async def test_rate_limit_cooldown_blocks_followup_without_network() -> None:
         clock_ms=lambda: NOW,
         monotonic=lambda: monotonic,
     )
+    bind_transport(transport)
     with pytest.raises(RetryableTransportError, match="rate limited"):
         await transport.request("GET", "/api/v3/time", signed=False)
     with pytest.raises(RetryableTransportError, match="cooldown"):
@@ -388,8 +413,15 @@ async def test_ambiguous_server_results_are_retryable(status: int, body: object)
     transport = BinanceTestnetTransport(
         "BTCUSDT",
         credentials=credentials(),
-        mock_transport=httpx.MockTransport(lambda _request: httpx.Response(status, json=body)),
+        mock_transport=httpx.MockTransport(
+            lambda req: (
+                response_for_basics(req)
+                if req.method == "GET"
+                else httpx.Response(status, json=body)
+            )
+        ),
     )
+    bind_transport(transport)
     with pytest.raises(RetryableTransportError, match="unknown"):
         await transport.request("POST", "/api/v3/order/test", {"symbol": "BTCUSDT"})
     await transport.aclose()
@@ -407,6 +439,7 @@ async def test_redirect_and_unapproved_or_cross_symbol_routes_fail_closed() -> N
     transport = BinanceTestnetTransport(
         "BTCUSDT", credentials=credentials(), mock_transport=httpx.MockTransport(handler)
     )
+    bind_transport(transport)
     with pytest.raises(APIError):
         await transport.request("GET", "/api/v3/time", signed=False)
     with pytest.raises(ValueError, match="allowlist"):
@@ -461,6 +494,7 @@ async def test_trade_pagination_deduplicates_and_rejects_malformed_match() -> No
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: NOW,
     )
+    bind_transport(transport)
     result = await transport.query("spotlab-safe-id")
     assert len(result.fills) == 1001
     malformed = True
@@ -493,6 +527,7 @@ async def test_pending_status_and_malformed_numeric_response_fail_closed() -> No
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: NOW,
     )
+    bind_transport(transport)
     with pytest.raises(OrderInvariantError, match="pending"):
         await transport.query("spotlab-safe-id")
     pending = False
@@ -516,6 +551,9 @@ async def test_halted_symbol_can_be_reconciled_but_cannot_be_submitted() -> None
             return httpx.Response(200, json=order_response("spotlab-safe-id"))
         if http_request.url.path == "/api/v3/myTrades":
             return httpx.Response(200, json=[])
+        basic = response_for_basics(http_request)
+        if basic is not None:
+            return basic
         raise AssertionError(http_request.url.path)
 
     transport = BinanceTestnetTransport(
@@ -524,6 +562,7 @@ async def test_halted_symbol_can_be_reconciled_but_cannot_be_submitted() -> None
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: NOW,
     )
+    bind_transport(transport)
     reconciled = await transport.query("spotlab-safe-id")
     assert reconciled.status is OrderState.NEW
     with pytest.raises(ValueError, match="not trading"):
@@ -560,6 +599,7 @@ async def test_unknown_rules_block_submit_without_blocking_queries(extra_rule: s
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: NOW,
     ) as transport:
+        bind_transport(transport)
         with pytest.raises(ValueError):
             await transport.submit(request())
         assert mutations == []
@@ -606,6 +646,7 @@ async def test_supported_dynamic_filter_is_evaluated_before_submit() -> None:
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: NOW,
     ) as transport:
+        bind_transport(transport)
         assert (await transport.submit(request())).status is OrderState.NEW
     assert posts == 1
 
@@ -630,6 +671,7 @@ async def test_deadline_and_before_send_callback_block_before_post() -> None:
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: NOW,
     ) as transport:
+        bind_transport(transport)
         with pytest.raises(SubmissionPrevented, match="expired"):
             await transport.submit(request(), deadline_ms=NOW)
         callback_calls = 0
@@ -680,6 +722,7 @@ async def test_third_asset_or_missing_commission_discount_blocks_post(
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: NOW,
     ) as transport:
+        bind_transport(transport)
         with pytest.raises(ValueError, match="discount"):
             await transport.submit(request())
     assert posts == 0
@@ -716,6 +759,7 @@ async def test_base_or_quote_commission_discount_is_allowed(discount_asset: str)
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: NOW,
     ) as transport:
+        bind_transport(transport)
         assert (await transport.submit(request())).status is OrderState.NEW
     assert posts == 1
 
@@ -744,9 +788,12 @@ async def test_null_discount_asset_allows_observation_but_blocks_enabled_submiss
         return basic
 
     async with BinanceTestnetTransport(
-        "BTCUSDT", credentials=credentials(),
-        mock_transport=httpx.MockTransport(handler), clock_ms=lambda: NOW,
+        "BTCUSDT",
+        credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler),
+        clock_ms=lambda: NOW,
     ) as transport:
+        bind_transport(transport)
         snapshot = await transport.account_snapshot()
         assert snapshot.can_trade is True
         assert snapshot.discount is not None
@@ -775,9 +822,12 @@ async def test_malformed_or_missing_discount_asset_remains_rejected(bad_asset):
         return basic
 
     async with BinanceTestnetTransport(
-        "BTCUSDT", credentials=credentials(),
-        mock_transport=httpx.MockTransport(handler), clock_ms=lambda: NOW,
+        "BTCUSDT",
+        credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler),
+        clock_ms=lambda: NOW,
     ) as transport:
+        bind_transport(transport)
         with pytest.raises(OrderInvariantError, match="discount asset"):
             await transport.account_snapshot()
 
@@ -806,6 +856,7 @@ async def test_complete_zero_commission_allows_enabled_unknown_discount_asset() 
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: NOW,
     ) as transport:
+        bind_transport(transport)
         snapshot = await transport.account_snapshot()
         assert snapshot.tax_commission is not None
         assert snapshot.special_commission is not None
@@ -855,6 +906,7 @@ async def test_each_commission_rate_must_be_present_valid_and_zero_for_exception
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: NOW,
     ) as transport:
+        bind_transport(transport)
         with pytest.raises(ValueError):
             await transport.submit(request())
     assert posts == 0
@@ -899,6 +951,7 @@ async def test_enabled_unsafe_discount_is_blocked_for_sell_and_oco(order_type: s
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: NOW,
     ) as transport:
+        bind_transport(transport)
         with pytest.raises(ValueError, match="discount"):
             await transport.prepare_submission(
                 sell, stop_price=D("900") if order_type == "OCO" else None
@@ -935,6 +988,7 @@ async def test_final_submit_preflight_rejects_fresh_nonzero_commission_before_po
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: NOW,
     ) as transport:
+        bind_transport(transport)
         await transport.prepare_submission(request())
         with pytest.raises(ValueError, match="discount"):
             await transport.submit(request())
@@ -954,9 +1008,7 @@ async def test_zero_commission_without_asset_replays_across_restart(
         if http_request.url.path == "/api/v3/order":
             return httpx.Response(
                 200,
-                json=order_response(
-                    "spotlab-safe-id", status="FILLED", executed="0.010"
-                ),
+                json=order_response("spotlab-safe-id", status="FILLED", executed="0.010"),
             )
         if http_request.url.path == "/api/v3/myTrades":
             return httpx.Response(
@@ -984,9 +1036,17 @@ async def test_zero_commission_without_asset_replays_across_restart(
         clock_ms=lambda: NOW,
     ) as transport:
         lifecycle = OrderLifecycle(database_url, transport)
+        lifecycle.store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
         lifecycle.store.create_or_get(request())
         first = await lifecycle.reconcile("intent-1")
+    async with BinanceTestnetTransport(
+        "BTCUSDT",
+        credentials=credentials(),
+        mock_transport=httpx.MockTransport(handler),
+        clock_ms=lambda: NOW,
+    ) as transport:
         restarted = OrderLifecycle(database_url, transport)
+        restarted.store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
         replay = await restarted.reconcile("intent-1")
         assert first.state is OrderState.FILLED
         assert replay.confirmed_quantity == D("0.010")
@@ -1034,6 +1094,7 @@ async def test_positive_unsupported_commission_marks_unknown_and_keeps_sell_rese
         clock_ms=lambda: NOW,
     ) as transport:
         lifecycle = OrderLifecycle(database_url, transport)
+        lifecycle.store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
         buy = request("buy-owned")
         lifecycle.store.create_or_get(buy)
         lifecycle.store.apply_update(
@@ -1094,6 +1155,7 @@ async def test_incomplete_or_unsafe_preflight_snapshot_blocks_post(failure: str)
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: current,
     ) as transport:
+        bind_transport(transport)
         with pytest.raises(ValueError):
             await transport.submit(request())
     assert posts == 0
@@ -1136,6 +1198,7 @@ async def test_future_protection_is_checked_before_buy_post(fault: str) -> None:
         mock_transport=httpx.MockTransport(handler),
         clock_ms=lambda: NOW,
     ) as transport:
+        bind_transport(transport)
         with pytest.raises(ValueError):
             await transport.submit(
                 request(),

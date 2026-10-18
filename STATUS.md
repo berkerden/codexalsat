@@ -40,16 +40,21 @@ PR #4 testnet temelini, PR #5 süreli alış→OCO çevrimini main’e taşıdı
   tanınmayan bot biçimindeki kimlikler yeni girişi engeller. Son gönderimden önce
   süre, saat, emir kapasitesi ve yerel kayıt değişimi tekrar kontrol edilir;
   mevcut çıkış yönetimi bu giriş denetiminden bağımsızdır. Anahtarlı denetim geçti.
-  Hesap kimliğine bağlama ve reset/sahipsiz emir kurtarması henüz tamamlanmadı.
+  Ardından tek hesap kimliğine kalıcı bağlama eklendi; yalnız boş defter ilk kez
+  bağlanabilir. Tüm emir yollarında hesap doğrulanır. Daha önce doğrulanmış geçmiş
+  kaybolursa kalıcı engel korunur; otomatik reset kurtarması veya engel temizliği yoktur.
+  Mevcut eski defter anahtarlı kontrolde migration_required verdi; tarihsel emir,
+  dolum, koruma ve çevrim kayıtlarının değişmediği doğrulandı. Bu defterin emir
+  işlemleri doğrulanmış geçiş tamamlanana kadar engellidir; yeni emir gönderilmedi.
 - A7: ayrı Astra bağlamında kritik inceleme ve hedefli tekrar doğrulama yapıldı;
   kapsam içindeki P1 bulguları giderildi. [İnceleme kaydı](docs/REVIEW.md).
 - A8: temiz GitHub clone'unda kurulum, iki sunucunun başlatılması ve supervisor
   kapanınca iki portun da serbest kalması doğrulandı. Kurtarma testleri ve
   [operasyon](docs/OPERATIONS.md) belgesi mevcut. Docker bu makinede yok.
 
-Önceki ana sürüm PR #9 CI’da 280 backend testi (SQLite + PostgreSQL 16),
+Önceki ana sürüm PR #10 CI’da 316 backend testi (SQLite + PostgreSQL 16),
 5 frontend birim testi, 2 tarayıcı akışı, lint/tip/build ve güvenlik kontrollerini geçti.
-18 Ekim başlangıç denetiminin tam yerel kontrolü: 240 başarılı, 76 PostgreSQL
+18 Ekim hesap bağlamasının tam yerel kontrolü: 277 başarılı, 95 PostgreSQL
 varyantı servis olmadığı için atlandı; lint ve tip kontrolü geçti. CI sonucu ilgili PR'dadır. Ayrı Astra/high
 incelemesinin bulguları giderildi; kapsam içinde açık P1/P2 yok. Sol/high kullanım
 sınırına ulaştıktan sonra kalan düzeltme ve testler ana oturumda tamamlandı.
@@ -58,7 +63,8 @@ Gerçek tarayıcıda BTC/SOL, periyot değişimi, araştırma formu, sanal oturu
 canlı mod kilidi ve 390×844 mobil menü/durdurma çubuğu kontrol edildi. Deneme paper oturumu durduruldu, açık pozisyon yok.
 Bu kısa kontrol ileri gözlem süresi yerine geçmez.
 
-Canlı **kapalı**. Eksikler: anahtarlı testnet kısmi dolum/hata senaryoları, stratejiyle sürekli
+Canlı **kapalı**. Eksikler: eski defterin doğrulanmış hesap geçişi, anahtarlı testnet
+kısmi dolum/hata senaryoları, stratejiyle sürekli
 giriş ve kesintisiz koruma/izleme entegrasyonu, hesap çapında sahipsiz emir ve reset kurtarma, BNB komisyon muhasebesi, pozisyon içi portföy maksimum düşüşü, 30 takvim günü ileri paper,
 yeterli ekonomik avantaj, üretim operasyon değerlendirmesi. PostgreSQL mantıksal
 kurtarma ve eşzamanlılık CI'da sınanır; fiziksel pg_dump/restore ve Docker testi

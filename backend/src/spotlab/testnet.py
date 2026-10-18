@@ -23,6 +23,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict, SecretStr, field_validator
 
 from spotlab.orders import (
+    TESTNET_ACCOUNT_VENUE,
+    AccountBindingError,
     ConfirmedFill,
     ExchangeFilters,
     ExchangeUpdate,
@@ -30,6 +32,7 @@ from spotlab.orders import (
     OrderInvariantError,
     OrderRequest,
     OrderState,
+    OrderStore,
     RetryableTransportError,
     SubmissionPrevented,
 )
@@ -53,6 +56,14 @@ MAX_ENTRY_CLOCK_DRIFT_MS: Final = 1_000
 TRADE_PAGE_SIZE: Final = 1_000
 _AMBIGUOUS_CODES: Final = frozenset({-1006, -1007})
 _METHODS: Final = frozenset({"GET", "POST", "DELETE"})
+_ORDER_SENSITIVE_READS: Final = frozenset(
+    {
+        ("GET", "/api/v3/openOrders"),
+        ("GET", "/api/v3/order"),
+        ("GET", "/api/v3/myTrades"),
+        ("GET", "/api/v3/orderList"),
+    }
+)
 _ALLOWED_ENDPOINTS: Final = frozenset(
     {
         ("GET", "/api/v3/time"),
@@ -366,6 +377,7 @@ class BinanceTestnetTransport:
         self._cooldown_until = 0.0
         self._metadata: SymbolMetadata | None = None
         self._expected: dict[str, OrderRequest] = {}
+        self._order_store: OrderStore | None = None
         self._preflight_open_order_marker: CapacityOrderMarker | None = None
         self._client = httpx.AsyncClient(
             base_url=TESTNET_BASE_URL,
@@ -383,6 +395,70 @@ class BinanceTestnetTransport:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+    def attach_order_store(self, store: OrderStore) -> None:
+        """Attach the sole durable ledger used to authorize order routes."""
+
+        if not isinstance(store, OrderStore):
+            raise TypeError("order store must be an OrderStore")
+        if self._order_store is not None and self._order_store is not store:
+            raise AccountBindingError("account_store_already_attached")
+        self._order_store = store
+
+    async def _fresh_account_uid(self) -> int:
+        try:
+            await self._sync_time()
+            raw = await self.request("GET", "/api/v3/account")
+            account = _mapping(raw, "account identity response")
+            uid = account.get("uid")
+            if isinstance(uid, bool) or not isinstance(uid, int) or uid <= 0:
+                raise AccountBindingError("account_identity_invalid")
+            return uid
+        except AccountBindingError:
+            raise
+        except Exception:
+            raise AccountBindingError("account_identity_unavailable") from None
+
+    async def verify_account_binding(self) -> None:
+        """Compare a fresh signed account UID with the immutable ledger binding."""
+
+        if self._order_store is None:
+            raise AccountBindingError("account_store_not_attached")
+        uid = await self._fresh_account_uid()
+        self._order_store.require_account_binding(TESTNET_ACCOUNT_VENUE, uid)
+
+    async def verify_mutation_allowed(self) -> None:
+        await self.verify_account_binding()
+        assert self._order_store is not None
+        reason = self._order_store.account_binding_reason()
+        if reason is not None:
+            raise AccountBindingError(reason)
+
+    async def account_binding_reason(self) -> str | None:
+        """Return only an aggregate binding reason for read-only diagnostics."""
+
+        if self._order_store is None:
+            return "account_store_not_attached"
+        try:
+            await self.verify_account_binding()
+        except AccountBindingError as error:
+            return error.reason_code
+        return self._order_store.account_binding_reason()
+
+    async def bind_attached_empty_ledger(self) -> None:
+        if self._order_store is None:
+            raise AccountBindingError("account_store_not_attached")
+        uid = await self._fresh_account_uid()
+        self._order_store.bind_account(TESTNET_ACCOUNT_VENUE, uid)
+
+    def _record_missing_history(self, path: str, values: Mapping[str, object]) -> None:
+        if self._order_store is None or path not in {"/api/v3/order", "/api/v3/orderList"}:
+            return
+        client_id = values.get("origClientOrderId")
+        if self._order_store.has_acknowledged_order(
+            client_id, self.symbol, values.get("orderId"), values.get("orderListId")
+        ):
+            self._order_store.record_account_incident("account_history_missing")
 
     def _timestamp(self) -> int:
         return self._clock_ms() + self._clock_offset_ms
@@ -426,6 +502,7 @@ class BinanceTestnetTransport:
         params: Mapping[str, object] | None = None,
         *,
         signed: bool = True,
+        _before_wire_send: Callable[[], None] | None = None,
     ) -> dict[str, Any] | list[Any]:
         """Call a fixed-host API endpoint once and return decoded JSON.
 
@@ -443,6 +520,17 @@ class BinanceTestnetTransport:
         supplied_symbol = values.get("symbol")
         if supplied_symbol is not None and supplied_symbol != self.symbol:
             raise OrderError("request symbol does not match transport symbol")
+        order_sensitive = (method, path) in _ORDER_SENSITIVE_READS or method in {"POST", "DELETE"}
+        if order_sensitive:
+            if not signed:
+                raise AccountBindingError("account_signed_request_required")
+            await self.verify_account_binding()
+            if (
+                method in {"POST", "DELETE"}
+                and self._order_store is not None
+                and self._order_store.account_binding_reason() == "account_history_missing"
+            ):
+                raise AccountBindingError("account_history_missing")
         if signed:
             if "signature" in values or "timestamp" in values:
                 raise ValueError("signature and timestamp are managed by the transport")
@@ -462,6 +550,8 @@ class BinanceTestnetTransport:
             content = payload.encode("ascii")
         elif payload:
             request_path = f"{path}?{payload}"
+        if _before_wire_send is not None:
+            _before_wire_send()
         try:
             response = await self._client.request(
                 method, request_path, headers=headers, content=content
@@ -502,6 +592,8 @@ class BinanceTestnetTransport:
                 f"(HTTP {response.status_code}, code {error_code})"
             )
         if response.status_code >= 400 or (error_code is not None and error_code < 0):
+            if error_code == -2013 and method == "GET":
+                self._record_missing_history(path, values)
             raise TestnetAPIError(response.status_code, error_code)
         if not isinstance(decoded, (dict, list)):
             raise OrderInvariantError("Spot Testnet JSON response has an invalid shape")
@@ -1018,6 +1110,22 @@ class BinanceTestnetTransport:
         self._metadata = metadata
         return metadata
 
+    def require_fresh_preflight(self) -> None:
+        metadata = self._metadata
+        if (
+            metadata is None
+            or not 0 <= self._clock_ms() - metadata.observed_at_ms <= MAX_PREFLIGHT_AGE_MS
+        ):
+            raise SubmissionPrevented(
+                "preflight became stale before submission",
+                reason_code="preflight_stale_after_audit",
+            )
+        if abs(self._clock_offset_ms) > MAX_ENTRY_CLOCK_DRIFT_MS:
+            raise SubmissionPrevented(
+                "clock drift changed before submission",
+                reason_code="preflight_clock_drift_after_audit",
+            )
+
     @staticmethod
     def _validate_client_id(client_order_id: str) -> None:
         if not CLIENT_ORDER_ID_RE.fullmatch(client_order_id):
@@ -1050,24 +1158,33 @@ class BinanceTestnetTransport:
             protection_target=protection_target,
             protection_stop=protection_stop,
         )
+        audit_observed_at_ms: int | None = None
+        final_open_orders: CapacityOrderMarker | None = None
         if entry_audit is not None:
             audit_observed_at_ms, final_open_orders = await entry_audit()
+
+        def final_send_check() -> None:
+            self.require_fresh_preflight()
             now = self._clock_ms()
             metadata = self._metadata
-            if metadata is None or any(
-                now - observed < 0 or now - observed > MAX_PREFLIGHT_AGE_MS
-                for observed in (metadata.observed_at_ms, audit_observed_at_ms)
+            if entry_audit is not None and (
+                metadata is None
+                or audit_observed_at_ms is None
+                or any(
+                    now - observed < 0 or now - observed > MAX_PREFLIGHT_AGE_MS
+                    for observed in (metadata.observed_at_ms, audit_observed_at_ms)
+                )
             ):
                 raise SubmissionPrevented(
                     "preflight became stale during startup audit",
                     reason_code="preflight_stale_after_audit",
                 )
-            if abs(self._clock_offset_ms) > MAX_ENTRY_CLOCK_DRIFT_MS:
+            if entry_audit is not None and abs(self._clock_offset_ms) > MAX_ENTRY_CLOCK_DRIFT_MS:
                 raise SubmissionPrevented(
                     "clock drift changed during startup audit",
                     reason_code="preflight_clock_drift_after_audit",
                 )
-            if (
+            if entry_audit is not None and (
                 self._preflight_open_order_marker is None
                 or final_open_orders != self._preflight_open_order_marker
             ):
@@ -1075,13 +1192,12 @@ class BinanceTestnetTransport:
                     "open orders changed during startup audit",
                     reason_code="open_orders_changed_after_preflight",
                 )
-        self._check_cooldown()
-        if deadline_ms is not None:
-            if self._clock_ms() >= deadline_ms:
+            if deadline_ms is not None and self._clock_ms() >= deadline_ms:
                 raise SubmissionPrevented("entry authorization expired before submission")
-        if before_send is not None:
-            before_send()
-        self._expected[order.client_order_id] = order
+            if before_send is not None:
+                before_send()
+            self._expected[order.client_order_id] = order
+
         raw = await self.request(
             "POST",
             "/api/v3/order",
@@ -1095,6 +1211,7 @@ class BinanceTestnetTransport:
                 "newClientOrderId": order.client_order_id,
                 "newOrderRespType": "RESULT",
             },
+            _before_wire_send=final_send_check,
         )
         return await self._parse_order(_mapping(raw, "new-order response"), order.client_order_id)
 

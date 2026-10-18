@@ -57,10 +57,27 @@ Testnet için aynı yerel emir defterini koruyun ve önce salt okunur denetimi �
 ```
 
 Engel varsa özgün çevrim/niyet üzerinden [Testnet uzlaştırma adımlarını](TESTNET.md)
-uygulayın. Denetim yeni girişleri engelleyebilir; mevcut çıkış yönetimini kapatmaz.
+uygulayın. Açık emir denetimi yeni girişleri engelleyebilir; doğrulanmış aynı hesapta
+mevcut çıkış yönetimi sürer. Hesap kimliği doğrulanamıyorsa sorgu, iptal ve koruyucu
+emirler de engellenir; başka hesaba eski defterin envanteriyle emir gönderilmez.
 Açık emir listesinde görünmemek iptal kanıtı değildir. Testnet sıfırlaması, eksik
 yerel kayıt veya farklı hesap şüphesinde defteri silmeyin; otomatik reset kurtarması
 henüz yoktur. Denetim hesabın bakiyelerini veya özel emir kimliklerini yazdırmaz.
+
+Eski sürümlerden kalan, henüz hesap kimliğine bağlanmamış defterin geçişi ayrıca
+doğrulanmalıdır. Başarılı hesap bağlantısı eski emirlerin o hesaba ait olduğunu
+kanıtlamaz. Bu sürüm eski deftere kendiliğinden hesap atamaz. Kayıtları koruyun;
+engeli aşmak için defteri silmeyin veya boş bir veritabanına geçmeyin. Salt okunur
+yerel durum ve hesap ön kontrolü kullanılabilir. API anahtarının değişmemesi,
+Testnet sıfırlaması olmadığını kanıtlamaz.
+
+`account_history_missing`, daha önce borsada doğrulanmış bir emir/liste artık
+bulunamadığında kalıcı olarak kaydedilir. Bu durumda aynı hesap doğrulansa bile
+iptal ve yeni koruma dahil tüm emir değişiklikleri engellenir; doğrulanmış salt
+okunur sorgular sürebilir. Sonradan başarılı sorgu engeli kendiliğinden kaldırmaz.
+Borsada önceden kurulmuş emirler bu yerel engel nedeniyle iptal edilmez. Henüz
+borsa kabulü doğrulanmamış bir emrin geçici yokluğu bu kalıcı engeli oluşturmaz;
+özgün kimlikle sorgulanarak belirsizliği çözülür.
 
 Eski/bozuk veri girişleri durdurur. Çıkış yönetimi yeni giriş araştırma servisinden
 bağımsızdır ve güncel bid/ask geldiğinde devam eder. Metadata veya mum servisi

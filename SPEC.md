@@ -72,6 +72,13 @@ penceresi karar zamanından önce bitmeli; örnekler örtüşmemeli. Benzerlik o
 9. Canlı koruma, Binance testnet yaşam döngüsü, gerçek veriyle ileri paper gözlemi ve
    bağımsız kritik inceleme tamamlanmadan canlı etkinleştirme engellenir.
 10. Push/merge bot başlatmaz/güncellemez. Canlı sürüm sabit commit, değişimi ayrı onay.
+11. Testnet emir defteri tek bir borsa ortamı ve doğrulanmış hesap kimliğine bağlanır.
+    Bağlama yalnız hiçbir emir, dolum, koruma veya çevrim kaydı olmayan defterde yapılır;
+    eski kayıtlara mevcut hesabın kimliği kendiliğinden atanmaz. Hesap doğrulanamıyorsa
+    emir sorgusu, gönderimi ve iptali engellenir; başka hesabın verisi eski deftere işlenmez.
+12. Aynı hesap kimliği Testnet sıfırlamasının çözüldüğünü kanıtlamaz. Kaybolan geçmiş,
+    iptal veya sıfır envanter olarak yorumlanmaz. Özgün kayıtlar korunur; belirsizliği
+    gidermek için defteri silmek, yeni kimlik vermek veya korumayı tekrar göndermek yoktur.
 
 ## Aşama kabulü ve operasyon
 

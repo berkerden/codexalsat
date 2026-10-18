@@ -16,6 +16,7 @@ from typing import Literal, cast
 from sqlalchemy import text
 from sqlalchemy.exc import NoResultFound
 
+from spotlab.orders import AccountBindingError
 from spotlab.testnet import BinanceTestnetTransport
 from spotlab.testnet_cli import DEFAULT_CREDENTIAL_FILE, load_credentials
 from spotlab.testnet_cycle import CLOSED_CYCLES, CyclePlan, TestnetCycle
@@ -97,6 +98,9 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
                 "manager_running": False,
                 "resume_required": state["state"] not in CLOSED_CYCLES,
             }
+        except AccountBindingError:
+            # Unverified credentials cannot change an existing cycle, even locally.
+            raise
         except BaseException:
             # Record the operator's stop even when cancellation interrupted I/O.
             # Do not issue new network requests from an interruption handler.
@@ -134,7 +138,11 @@ def main() -> int:
             json.dumps(
                 {
                     "status": "blocked",
-                    "reason": type(error).__name__,
+                    "reason": (
+                        error.reason_code
+                        if isinstance(error, AccountBindingError)
+                        else type(error).__name__
+                    ),
                     "cycle_id": args.cycle,
                     "resume_required": True,
                     "production_enabled": False,

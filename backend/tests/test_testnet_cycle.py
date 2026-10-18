@@ -13,6 +13,7 @@ from backend.tests.test_testnet import NOW as EXCHANGE_TIME
 from backend.tests.test_testnet import credentials, response_for_basics
 
 from spotlab.orders import (
+    TESTNET_ACCOUNT_VENUE,
     ConfirmedFill,
     ExchangeFilters,
     ExchangeUpdate,
@@ -168,6 +169,7 @@ def setup(database_url: str, monkeypatch):
         cast(BinanceTestnetTransport, venue),
         clock_ms=lambda: clock[0],
     )
+    cycle.store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
     protection = ProtectiveVenue(cycle)
     cycle.protection = protection  # type: ignore[assignment]
     monkeypatch.setattr(
@@ -538,6 +540,7 @@ def test_real_transport_lost_accepted_buy_recovers_query_only_after_restart(
             clock_ms=lambda: EXCHANGE_TIME,
         ) as wire:
             controller = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            controller.store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
             with pytest.raises(SimulatedProcessLoss):
                 await controller.start(terms)
             assert controller.store.get(terms.entry_id).state is OrderState.UNKNOWN
@@ -555,6 +558,7 @@ def test_real_transport_lost_accepted_buy_recovers_query_only_after_restart(
             clock_ms=lambda: EXCHANGE_TIME,
         ) as wire:
             restarted = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            restarted.store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
             assert (await restarted.advance("one", allow_mutations=True))["state"] == "ENTRY_OPEN"
             assert (await restarted.advance("one", allow_mutations=True))["state"] == "ENTRY_OPEN"
             entry = restarted.store.get(terms.entry_id)
@@ -604,6 +608,7 @@ def test_real_transport_lost_accepted_cancel_recovers_late_fills_and_net_fee_siz
             clock_ms=lambda: EXCHANGE_TIME,
         ) as wire:
             controller = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            controller.store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
             assert (await controller.start(terms))["state"] == "ENTRY_OPEN"
             venue.entry_trades = entry_trades
             venue.entry_status = "PARTIALLY_FILLED"
@@ -629,6 +634,7 @@ def test_real_transport_lost_accepted_cancel_recovers_late_fills_and_net_fee_siz
             clock_ms=lambda: EXCHANGE_TIME,
         ) as wire:
             restarted = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            restarted.store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
             incomplete = await restarted.advance("one", allow_mutations=True)
             assert incomplete["reason"] == "entry_trade_details_incomplete"
             assert venue.oco_posts == 0
@@ -685,6 +691,7 @@ def test_real_transport_cancel_not_accepted_is_never_retried(database_url: str) 
             clock_ms=lambda: EXCHANGE_TIME,
         ) as wire:
             controller = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            controller.store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
             assert (await controller.start(terms))["state"] == "ENTRY_OPEN"
             venue.entry_trades = partial_trade
             venue.entry_status = "PARTIALLY_FILLED"
@@ -704,6 +711,7 @@ def test_real_transport_cancel_not_accepted_is_never_retried(database_url: str) 
             clock_ms=lambda: EXCHANGE_TIME,
         ) as wire:
             restarted = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            restarted.store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
             for _ in range(2):
                 result = await restarted.advance("one", allow_mutations=True)
                 assert result["state"] == "ENTRY_SETTLING"
@@ -746,6 +754,7 @@ def test_real_transport_lost_accepted_oco_keeps_one_reservation_across_restart(
             clock_ms=lambda: EXCHANGE_TIME,
         ) as wire:
             controller = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            controller.store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
             with pytest.raises(SimulatedProcessLoss):
                 await controller.start(terms)
             protection = controller.store.get(terms.protection_id)
@@ -764,6 +773,7 @@ def test_real_transport_lost_accepted_oco_keeps_one_reservation_across_restart(
             clock_ms=lambda: EXCHANGE_TIME,
         ) as wire:
             restarted = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            restarted.store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
             assert (await restarted.advance("one", allow_mutations=True))["state"] == "PROTECTED"
             records = restarted.store.list_records()
             assert len(records) == 2
@@ -879,6 +889,7 @@ def test_real_transports_full_cycle_and_restart_without_duplicate_orders(
             clock_ms=lambda: EXCHANGE_TIME,
         ) as wire:
             controller = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            controller.store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
             result = await controller.start(terms)
             assert result["state"] == ("BLOCKED" if lose_oco_reply else "PROTECTED")
             controller.store.db.dispose()
@@ -889,6 +900,7 @@ def test_real_transports_full_cycle_and_restart_without_duplicate_orders(
             clock_ms=lambda: EXCHANGE_TIME,
         ) as wire:
             restarted = Cycle(database_url, wire, clock_ms=lambda: EXCHANGE_TIME)
+            restarted.store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
             assert (await restarted.advance("one", allow_mutations=True))["state"] == "PROTECTED"
             exited = True
             assert (await restarted.advance("one", allow_mutations=True))["state"] == "EXITED"
@@ -947,6 +959,7 @@ async def test_changed_final_account_snapshot_blocks_post_and_restart_never_quer
         cycle.store.db.url.render_as_string(hide_password=False),
         cast(BinanceTestnetTransport, venue),
     )
+    restarted.store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
     repeated = await restarted.advance("one", allow_mutations=True)
     assert repeated["state"] == "ABORTED"
     assert repeated["reason"] == "account_snapshot_changed"

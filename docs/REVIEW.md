@@ -135,3 +135,30 @@ Ana oturumun son hedefli paketi 131 başarılı, yerel PostgreSQL olmadığı i�
 yanıtları MockTransport ile benzetilir. Salt okunur anahtarlı denetim geçti;
 bu paket yeni Testnet emri veya üretim isteği göndermedi. Hesap bağlama, tarihsel
 tam uzlaştırma ve otomatik reset kurtarması kapsam dışında kalır.
+
+## Kalıcı hesap bağlama ve geçmiş kaybı — 18 Ekim 2026
+
+Astra/high sözleşmesiyle başlayan Sol/high uygulaması, kullanım sınırından sonra
+ana oturumda tamamlandı. Ayrı Astra/high kaynak farkını ve testleri inceledi.
+İncelemede giderilen bulgular:
+
+- P1: henüz borsa kabulü doğrulanmamış emrin geçici yokluğu kalıcı geçmiş kaybı
+  sayılabiliyordu. Kalıcı engel artık önceki borsa kimliği kanıtını gerektirir;
+  belirsiz giriş sonradan dolarsa koruması bu yanlış gerekçeyle engellenmez.
+- P2: aynı göreli SQLite URL'si başka dosyaları gösterebiliyordu. Taşıyıcı yalnız
+  aynı defter nesnesini kabul eder; başka nesneye yeniden bağlanmaz.
+- P2: komut satırı hata yakalayıcısı hesap doğrulaması başarısızken bile çevrimin
+  stop kaydını değiştirebiliyordu. Kimlik hataları, bağlantı/izin/bozuk yanıt dahil,
+  ayrı ve temiz gerekçeyle çıkar; önceki çevrim ve emir kanıtları korunur.
+- Sayısal metin emir kimlikleri geçmiş kaybı eşleştirmesine dahil edildi. Son
+  kimlik sorgusundan sonra süre/güncellik yeniden kontrol edilir. Kesin olarak
+  gönderilmemiş OCO talebi aynı kimlikle yeniden denenebilir; belirsiz gönderim değil.
+
+Son bağımsız hedefli doğrulama: 172 başarılı, PostgreSQL servisi olmadığı için
+51 varyant atlandı. Kapsam içinde açık P1/P2 kod bulgusu yok. Tam yerel paket:
+277 başarılı, 95 PostgreSQL varyantı atlandı; lint ve strict tip kontrolü geçti.
+CI sonucu ilgili PR'dadır. Eski anahtarlı yerel defter migration_required verdi;
+emir/dolum/koruma/çevrim satırları değişmedi. Bu paket borsada değişiklik yapmadı.
+Hesap bağlama eski kayıtların sahipliğini veya reset dönemini kendiliğinden kanıtlamaz.
+Kalıcı geçmiş kaybı engeli iptal ve yeni korumayı da durdurur; doğrulanmış sorgular
+sürer. Eski defter geçişi, engel çözümü ve otomatik reset kurtarması henüz yoktur.
