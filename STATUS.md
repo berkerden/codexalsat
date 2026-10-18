@@ -1,4 +1,4 @@
-# Durum — 2026-10-17
+# Durum — 2026-10-18
 
 Yerel kaynak gerçek `berkerden/codexalsat` clone'udur. Public depo kullanılır.
 PR #3 araştırma/paper sürümünü main’e taşıdı; issue #2 canlı öncesi kalan işleri izler.
@@ -35,19 +35,24 @@ PR #4 testnet temelini, PR #5 süreli alış→OCO çevrimini main’e taşıdı
   süreçler kesildi. UNKNOWN kayıtları yeni süreçte sorguyla çözüldü; sonuç NO_FILL,
   tek niyet ve sıfır dolum. Son tekrar yönetiminde emir gönderimi denenmedi.
   Gerçek ağ kesintisi veya borsada kısmi dolum doğrulaması iddia edilmez.
+  18 Ekim’de hesap çapındaki açık emirleri yerel kayıtlarla karşılaştıran salt
+  okunur denetim eklendi. Belirsiz kayıt, kalan envanter, kimlik uyuşmazlığı ve
+  tanınmayan bot biçimindeki kimlikler yeni girişi engeller. Son gönderimden önce
+  süre, saat, emir kapasitesi ve yerel kayıt değişimi tekrar kontrol edilir;
+  mevcut çıkış yönetimi bu giriş denetiminden bağımsızdır. Anahtarlı denetim geçti.
+  Hesap kimliğine bağlama ve reset/sahipsiz emir kurtarması henüz tamamlanmadı.
 - A7: ayrı Astra bağlamında kritik inceleme ve hedefli tekrar doğrulama yapıldı;
   kapsam içindeki P1 bulguları giderildi. [İnceleme kaydı](docs/REVIEW.md).
 - A8: temiz GitHub clone'unda kurulum, iki sunucunun başlatılması ve supervisor
   kapanınca iki portun da serbest kalması doğrulandı. Kurtarma testleri ve
   [operasyon](docs/OPERATIONS.md) belgesi mevcut. Docker bu makinede yok.
 
-Önceki ana sürüm PR #8 CI’da 272 backend testi (SQLite + PostgreSQL 16),
+Önceki ana sürüm PR #9 CI’da 280 backend testi (SQLite + PostgreSQL 16),
 5 frontend birim testi, 2 tarayıcı akışı, lint/tip/build ve güvenlik kontrollerini geçti.
-Yerelde servis olmadığı için atlanan 60 PostgreSQL varyantı CI’da geçti.
-Önceki uygulama paketinin yerel kontrolü: 212 başarılı, 60 PostgreSQL varyantı servis olmadığı
-için atlandı. 17 Ekim kurtarma paketinin bağımsız çevrim kontrolünde 24 test geçti,
-24 PostgreSQL varyantı yerel servis olmadığı için atlandı; CI sonucu ilgili PR'dadır.
-Ayrı Astra/high incelemesinde açık P1/P2 yok.
+18 Ekim başlangıç denetiminin tam yerel kontrolü: 240 başarılı, 76 PostgreSQL
+varyantı servis olmadığı için atlandı; lint ve tip kontrolü geçti. CI sonucu ilgili PR'dadır. Ayrı Astra/high
+incelemesinin bulguları giderildi; kapsam içinde açık P1/P2 yok. Sol/high kullanım
+sınırına ulaştıktan sonra kalan düzeltme ve testler ana oturumda tamamlandı.
 
 Gerçek tarayıcıda BTC/SOL, periyot değişimi, araştırma formu, sanal oturum başlatma/durdurma,
 canlı mod kilidi ve 390×844 mobil menü/durdurma çubuğu kontrol edildi. Deneme paper oturumu durduruldu, açık pozisyon yok.

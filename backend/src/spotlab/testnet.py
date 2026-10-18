@@ -12,7 +12,7 @@ import hmac
 import os
 import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
@@ -177,6 +177,44 @@ class AccountSnapshot:
         return AssetBalance(asset, Decimal(0), Decimal(0))
 
 
+@dataclass(frozen=True)
+class AccountOpenOrder:
+    """Strict, account-wide open-order identity used by the startup audit."""
+
+    symbol: str
+    order_id: int
+    client_order_id: str
+    side: str
+    order_type: str
+    original_quantity: Decimal
+    executed_quantity: Decimal
+    order_list_id: int
+    price: Decimal
+    stop_price: Decimal
+    time_in_force: str
+    status: str
+
+    @property
+    def capacity_key(self) -> tuple[str, str, str, Decimal, Decimal, int]:
+        return (
+            self.symbol,
+            self.side,
+            self.order_type,
+            self.original_quantity,
+            self.executed_quantity,
+            self.order_list_id,
+        )
+
+
+@dataclass(frozen=True)
+class AccountWideSnapshot:
+    account: AccountSnapshot
+    open_orders: tuple[AccountOpenOrder, ...]
+
+
+CapacityOrderMarker = tuple[tuple[str, str, str, Decimal, Decimal, int], ...]
+
+
 def _form_encode(params: Mapping[str, object]) -> str:
     """Encode once before signing, matching the bytes sent to Binance."""
 
@@ -246,10 +284,7 @@ def _has_complete_zero_commission(snapshot: AccountSnapshot) -> bool:
     )
     return snapshot.discount is not None and all(
         group is not None
-        and all(
-            rate == 0
-            for rate in (group.maker, group.taker, group.buyer, group.seller)
-        )
+        and all(rate == 0 for rate in (group.maker, group.taker, group.buyer, group.seller))
         for group in groups
     )
 
@@ -331,6 +366,7 @@ class BinanceTestnetTransport:
         self._cooldown_until = 0.0
         self._metadata: SymbolMetadata | None = None
         self._expected: dict[str, OrderRequest] = {}
+        self._preflight_open_order_marker: CapacityOrderMarker | None = None
         self._client = httpx.AsyncClient(
             base_url=TESTNET_BASE_URL,
             timeout=httpx.Timeout(float(timeout_s)),
@@ -707,7 +743,74 @@ class BinanceTestnetTransport:
             asset_filters=_merge_filters(metadata.asset_filters, parsed["assetFilters"], "asset"),
         )
 
+    async def account_wide_snapshot(self) -> AccountWideSnapshot:
+        """Fetch authenticated account and all-symbol open orders without mutation."""
+
+        account = await self.account_snapshot()
+        return AccountWideSnapshot(account, await self._account_open_orders())
+
+    async def _account_open_orders(self) -> tuple[AccountOpenOrder, ...]:
+        raw = await self.request("GET", "/api/v3/openOrders")
+        if not isinstance(raw, list):
+            raise OrderInvariantError("openOrders response must be a list")
+        orders: list[AccountOpenOrder] = []
+        for value in raw:
+            item = _mapping(value, "open order")
+            symbol = item.get("symbol")
+            side = item.get("side")
+            order_type = item.get("type")
+            order_list_id = item.get("orderListId")
+            client_order_id = item.get("clientOrderId")
+            time_in_force = item.get("timeInForce")
+            status = item.get("status")
+            if not isinstance(symbol, str) or not symbol:
+                raise OrderInvariantError("open order symbol is malformed")
+            if side not in {"BUY", "SELL"}:
+                raise OrderInvariantError("open order side is malformed")
+            if not isinstance(order_type, str) or not order_type:
+                raise OrderInvariantError("open order type is malformed")
+            if (
+                isinstance(order_list_id, bool)
+                or not isinstance(order_list_id, int)
+                or order_list_id < -1
+            ):
+                raise OrderInvariantError("open order list ID is malformed")
+            order_id = _response_int(item.get("orderId"), "open order ID")
+            if not isinstance(client_order_id, str):
+                raise OrderInvariantError("open order client ID is malformed")
+            self._validate_client_id(client_order_id)
+            if not isinstance(time_in_force, str) or not time_in_force:
+                raise OrderInvariantError("open order time in force is malformed")
+            if status not in {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"}:
+                raise OrderInvariantError("open order status is malformed")
+            original = _response_decimal(
+                item.get("origQty"), "open order original quantity", allow_zero=False
+            )
+            executed = _response_decimal(item.get("executedQty"), "open order executed quantity")
+            if executed > original:
+                raise OrderInvariantError("open order executed quantity exceeds original")
+            orders.append(
+                AccountOpenOrder(
+                    symbol,
+                    order_id,
+                    client_order_id,
+                    cast(str, side),
+                    order_type,
+                    original,
+                    executed,
+                    order_list_id,
+                    _response_decimal(item.get("price"), "open order price"),
+                    _response_decimal(item.get("stopPrice"), "open order stop price"),
+                    time_in_force,
+                    status,
+                )
+            )
+        return tuple(orders)
+
     async def _open_orders(self) -> tuple[VenueOpenOrder, ...]:
+        # Submission-capacity validation intentionally accepts unrelated order
+        # statuses and does not depend on audit-only identity fields. Exit
+        # management must remain available when the narrow entry audit blocks.
         raw = await self.request("GET", "/api/v3/openOrders")
         if not isinstance(raw, list):
             raise OrderInvariantError("openOrders response must be a list")
@@ -856,6 +959,19 @@ class BinanceTestnetTransport:
         ):
             raise OrderError("third-asset commission discount is unsafe for submission")
         open_orders = await self._open_orders()
+        self._preflight_open_order_marker = tuple(
+            sorted(
+                (
+                    item.symbol,
+                    item.side,
+                    item.order_type,
+                    item.original_quantity,
+                    item.executed_quantity,
+                    item.order_list_id,
+                )
+                for item in open_orders
+            )
+        )
         reference, average, average_mins, last = await self._dynamic_prices(
             metadata, future or order
         )
@@ -914,6 +1030,7 @@ class BinanceTestnetTransport:
         deadline_ms: int | None = None,
         reserve_protection: bool = False,
         before_send: Callable[[], None] | None = None,
+        entry_audit: Callable[[], Awaitable[tuple[int, CapacityOrderMarker]]] | None = None,
         protection_target: Decimal | None = None,
         protection_stop: Decimal | None = None,
     ) -> ExchangeUpdate:
@@ -925,12 +1042,39 @@ class BinanceTestnetTransport:
             raise TypeError("deadline_ms must be an integer UTC millisecond timestamp")
         if before_send is not None and not callable(before_send):
             raise TypeError("before_send must be callable")
+        if entry_audit is not None and not callable(entry_audit):
+            raise TypeError("entry_audit must be callable")
         await self.prepare_submission(
             order,
             reserve_protection=reserve_protection,
             protection_target=protection_target,
             protection_stop=protection_stop,
         )
+        if entry_audit is not None:
+            audit_observed_at_ms, final_open_orders = await entry_audit()
+            now = self._clock_ms()
+            metadata = self._metadata
+            if metadata is None or any(
+                now - observed < 0 or now - observed > MAX_PREFLIGHT_AGE_MS
+                for observed in (metadata.observed_at_ms, audit_observed_at_ms)
+            ):
+                raise SubmissionPrevented(
+                    "preflight became stale during startup audit",
+                    reason_code="preflight_stale_after_audit",
+                )
+            if abs(self._clock_offset_ms) > MAX_ENTRY_CLOCK_DRIFT_MS:
+                raise SubmissionPrevented(
+                    "clock drift changed during startup audit",
+                    reason_code="preflight_clock_drift_after_audit",
+                )
+            if (
+                self._preflight_open_order_marker is None
+                or final_open_orders != self._preflight_open_order_marker
+            ):
+                raise SubmissionPrevented(
+                    "open orders changed during startup audit",
+                    reason_code="open_orders_changed_after_preflight",
+                )
         self._check_cooldown()
         if deadline_ms is not None:
             if self._clock_ms() >= deadline_ms:

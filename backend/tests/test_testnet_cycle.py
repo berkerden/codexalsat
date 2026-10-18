@@ -21,7 +21,7 @@ from spotlab.orders import (
     OrderState,
 )
 from spotlab.protection import ProtectionObservation
-from spotlab.testnet import BinanceTestnetTransport
+from spotlab.testnet import AccountOpenOrder, BinanceTestnetTransport
 from spotlab.testnet_cycle import CyclePlan
 from spotlab.testnet_cycle import TestnetCycle as Cycle
 
@@ -57,10 +57,28 @@ class Venue:
         self.current = event(self.entry, OrderState.NEW)
         self.cancel_result: ExchangeUpdate | None = None
         self.query_failure = False
+        self.queries = 0
         self.submit_failure = False
         self.preflight_failure = False
         self.deadline_seen: int | None = None
         self.during_final_preflight = None
+        self.after_final_audit = None
+        self.audit_balance = D("100")
+        self.audit_orders: tuple[AccountOpenOrder, ...] = ()
+
+    async def account_wide_snapshot(self):
+        return SimpleNamespace(
+            account=SimpleNamespace(
+                can_trade=True,
+                balances=(SimpleNamespace(asset="USDT", free=self.audit_balance, locked=D(0)),),
+                standard_commission=None,
+                tax_commission=None,
+                special_commission=None,
+                discount=None,
+                observed_at_ms=NOW,
+            ),
+            open_orders=self.audit_orders,
+        )
 
     async def prepare_submission(self, order, **_kwargs):
         if self.preflight_failure:
@@ -77,11 +95,16 @@ class Venue:
         deadline_ms=None,
         reserve_protection=False,
         before_send=None,
+        entry_audit=None,
         protection_target=None,
         protection_stop=None,
     ):
         if self.during_final_preflight is not None:
             self.during_final_preflight()
+        if entry_audit is not None:
+            await entry_audit()
+        if self.after_final_audit is not None:
+            self.after_final_audit()
         if before_send is not None:
             before_send()
         self.posts += 1
@@ -92,6 +115,7 @@ class Venue:
         return self.current
 
     async def query(self, _client):
+        self.queries += 1
         if self.query_failure:
             raise TimeoutError("unavailable")
         return self.current
@@ -909,3 +933,76 @@ async def test_unknown_exit_ledger_invalidates_recent_cached_coverage(setup) -> 
     result = cycle.status("one")
     assert not result["coverage_observation_fresh"]
     assert D(result["unprotected_quantity"]) == D("0.4995")
+
+
+@pytest.mark.asyncio
+async def test_changed_final_account_snapshot_blocks_post_and_restart_never_queries(setup) -> None:
+    cycle, venue, _, _ = setup
+    venue.during_final_preflight = lambda: setattr(venue, "audit_balance", D("99"))
+    result = await cycle.start(plan())
+    assert result["state"] == "BLOCKED"
+    assert result["reason"] == "account_snapshot_changed"
+    assert venue.posts == venue.queries == 0
+    restarted = Cycle(
+        cycle.store.db.url.render_as_string(hide_password=False),
+        cast(BinanceTestnetTransport, venue),
+    )
+    repeated = await restarted.advance("one", allow_mutations=True)
+    assert repeated["state"] == "ABORTED"
+    assert repeated["reason"] == "account_snapshot_changed"
+    assert venue.posts == venue.queries == 0
+
+
+@pytest.mark.asyncio
+async def test_matching_candidate_remote_order_at_final_audit_blocks_post(setup) -> None:
+    cycle, venue, _, _ = setup
+    entry = plan().entry()
+
+    def reveal_candidate() -> None:
+        venue.audit_orders = (
+            AccountOpenOrder(
+                entry.symbol,
+                7,
+                entry.client_order_id,
+                "BUY",
+                "LIMIT",
+                entry.quantity,
+                D(0),
+                -1,
+                entry.price,
+                D(0),
+                "GTC",
+                "NEW",
+            ),
+        )
+
+    venue.during_final_preflight = reveal_candidate
+    result = await cycle.start(plan())
+    assert result["state"] == "BLOCKED"
+    assert result["reason"] == "candidate_remote_open"
+    assert venue.posts == venue.queries == 0
+
+
+@pytest.mark.asyncio
+async def test_local_ledger_change_after_final_audit_blocks_post(setup) -> None:
+    cycle, venue, _, _ = setup
+
+    def add_local_intent() -> None:
+        cycle.store.create_or_get(
+            OrderRequest(
+                "concurrent",
+                "spotlab-0123456789abcdef01234567",
+                "SOLUSDT",
+                "BUY",
+                D("1"),
+                D("10"),
+                "USDT",
+                "other-scope",
+            )
+        )
+
+    venue.after_final_audit = add_local_intent
+    result = await cycle.start(plan())
+    assert result["state"] == "BLOCKED"
+    assert result["reason"] == "local_ledger_changed"
+    assert venue.posts == venue.queries == 0

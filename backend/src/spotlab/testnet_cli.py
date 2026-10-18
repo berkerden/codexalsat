@@ -16,6 +16,7 @@ from typing import Literal, cast
 
 from spotlab.orders import OrderLifecycle, OrderStore
 from spotlab.protection import ProtectionLifecycle
+from spotlab.startup_audit import audit_testnet_startup
 from spotlab.testnet import BinanceTestnetTransport, TestnetCredentials
 
 DEFAULT_CREDENTIAL_FILE = Path("data/testnet-credentials.json")
@@ -78,6 +79,12 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     async with BinanceTestnetTransport(
         cast(Literal["BTCUSDT", "SOLUSDT"], args.symbol), credentials=credentials
     ) as transport:
+        if args.command == "audit":
+            store = OrderStore(args.database, recover_submitting=False)
+            try:
+                return (await audit_testnet_startup(store, transport)).diagnostic()
+            finally:
+                store.db.dispose()
         metadata = await transport.exchange_info()
         if args.command == "preflight":
             account = await transport.account_snapshot()
@@ -115,7 +122,9 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["configure", "preflight", "status", "reconcile"])
+    parser.add_argument(
+        "command", choices=["configure", "preflight", "status", "audit", "reconcile"]
+    )
     parser.add_argument("--symbol", choices=["BTCUSDT", "SOLUSDT"], default="BTCUSDT")
     parser.add_argument("--credentials", type=Path, default=DEFAULT_CREDENTIAL_FILE)
     parser.add_argument("--database", default="sqlite:///data/testnet-orders.sqlite")
@@ -129,7 +138,10 @@ def main() -> int:
         else:
             if args.database == "sqlite:///data/testnet-orders.sqlite":
                 Path("data").mkdir(exist_ok=True)
-            print(json.dumps(asyncio.run(run(args))))
+            result = asyncio.run(run(args))
+            print(json.dumps(result))
+            if args.command == "audit" and result.get("status") == "blocked":
+                return 1
     except Exception as error:
         # Pydantic/httpx/JSON exceptions can contain input values or signed URLs.
         # Never print their message, traceback, account payload or chained cause.

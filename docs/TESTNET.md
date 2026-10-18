@@ -24,6 +24,7 @@ this application, or shell command arguments. From the repository root:
 .venv/bin/python -m spotlab.testnet_cli configure
 .venv/bin/python -m spotlab.testnet_cli preflight --symbol BTCUSDT
 .venv/bin/python -m spotlab.testnet_cli preflight --symbol SOLUSDT
+.venv/bin/python -m spotlab.testnet_cli audit
 .venv/bin/python -m spotlab.testnet_cli status
 ```
 
@@ -52,6 +53,38 @@ The default ledger is `data/testnet-orders.sqlite`, separate from the paper data
 across process restarts. Testnet periodically resets exchange data; a missing exchange order is
 not proof of cancellation and will remain UNKNOWN. Manual reconciliation of a reset is still an
 operational blocker; do not delete the ledger to silence an unknown order.
+
+## Open-order audit before a new entry
+
+`audit` reads an authenticated account-wide open-order snapshot and compares it with all intents
+in the selected local ledger. Its output contains aggregate counts and reason codes, not account
+balances, client/order IDs or raw exchange responses. A blocked result exits nonzero. The selected
+BTCUSDT/SOLUSDT transport does not limit the account-wide open-order check to that pair.
+
+New bounded entries require this check, including a fresh check at the final send boundary.
+Unresolved local intents, incomplete terminal trade records, remaining bot-owned inventory,
+known terminal orders still open, identity inconsistencies or untracked IDs matching the app's
+generated namespace block entry. For OCO records, target and stop child IDs are included even
+when the parent is terminal. Only the exact unsent candidate's local record can be exempted;
+a matching remote order always blocks another submission. A missing open order never proves
+cancellation. Unrelated untracked orders remain untouched and still count in venue capacity
+checks; their manual or automated provenance is not inferred.
+
+The audit does not submit, cancel, adopt or erase exchange orders. Existing-entry reconciliation,
+cancellation and protective exits remain available while new entry is blocked. Use the original
+cycle/intent and ledger to investigate; do not delete records or invent replacement identifiers
+to bypass a blocker. The final audit is followed by the entry deadline and persistent stop checks.
+Preflight age/clock drift and account-wide capacity observations are checked again after the
+audit's network calls. Local evidence is read consistently under the writer lock, then compared
+again at send authorization. A proven-unsent refusal retains an allowlisted reason; a fresh
+manager closes that local attempt as ABORTED without querying a nonexistent exchange order.
+Any original audit blocker still has to clear before a new entry can pass its own checks.
+
+This is a point-in-time open-order/ledger comparison, not complete historical account or trade
+reconciliation. The ledger is not yet bound to an exchange account identity. An empty snapshot
+cannot prove that the correct account was selected or that a Testnet reset was reconciled.
+Arbitrary untracked client IDs cannot reliably be attributed to this app. Orphan/reset recovery,
+account binding and continuous unattended monitoring remain separate work.
 
 ## Transport and identity
 
@@ -225,6 +258,13 @@ No runtime fault-injection option was added to the application. The stateful Moc
 exercise the real transport/parser and durable controller with query outages, partial fills,
 late cancellation fills, delayed trade details, net base-fee sizing and ambiguous OCO recovery.
 Those deterministic partial-fill outcomes are simulated evidence, not authenticated exchange fills.
+
+On 2026-10-18, the authenticated read-only startup audit passed against the existing local ledger
+and current Testnet account-wide open-order snapshot. No new order, cancellation or account setting
+change was made. Mock tests cover candidate collisions, orphan-looking IDs outside BTC/SOL,
+incomplete records, residual inventory, OCO child identity, late ledger/capacity changes, stale
+preflight, clock drift, expiry, stop requests and sanitized CLI failure output. This observation
+does not verify account binding, reset recovery or future snapshot consistency.
 
 Protocol references: [official Testnet REST API](https://github.com/binance/binance-spot-api-docs/blob/master/testnet/rest-api.md)
 and [general information](https://github.com/binance/binance-spot-api-docs/blob/master/testnet/general-info.md).

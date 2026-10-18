@@ -9,13 +9,14 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 
 from sqlalchemy import text
 
 from spotlab.orders import (
+    AUDIT_REJECTION_REASONS,
     TERMINAL_STATES,
     ExchangeUpdate,
     OrderConflict,
@@ -28,7 +29,14 @@ from spotlab.orders import (
     deterministic_client_order_id,
 )
 from spotlab.protection import ProtectionLifecycle, ProtectionRequest
-from spotlab.testnet import BinanceTestnetTransport
+from spotlab.startup_audit import (
+    AccountMarker,
+    LedgerMarker,
+    StartupAuditResult,
+    audit_testnet_startup,
+    local_ledger_marker,
+)
+from spotlab.testnet import BinanceTestnetTransport, CapacityOrderMarker
 from spotlab.venue_filters import round_protection_quantity
 
 D = Decimal
@@ -124,11 +132,16 @@ class _EntryTransport:
     """Carry a persisted, bounded entry deadline into the final transport send."""
 
     def __init__(
-        self, transport: BinanceTestnetTransport, plan: CyclePlan, before_send: Callable[[], None]
+        self,
+        transport: BinanceTestnetTransport,
+        plan: CyclePlan,
+        before_send: Callable[[], None],
+        entry_audit: Callable[[], Awaitable[tuple[int, CapacityOrderMarker]]],
     ) -> None:
         self.transport = transport
         self.plan = plan
         self.before_send = before_send
+        self.entry_audit = entry_audit
 
     async def submit(self, order: OrderRequest) -> ExchangeUpdate:
         return await self.transport.submit(
@@ -136,6 +149,7 @@ class _EntryTransport:
             deadline_ms=self.plan.entry_deadline_ms,
             reserve_protection=True,
             before_send=self.before_send,
+            entry_audit=self.entry_audit,
             protection_target=self.plan.target_price,
             protection_stop=self.plan.stop_price,
         )
@@ -267,7 +281,7 @@ class TestnetCycle:
             "observed_at_ms": row["updated_at"],
         }
 
-    def _authorize_send(self, plan: CyclePlan) -> None:
+    def _authorize_send(self, plan: CyclePlan, expected_ledger: LedgerMarker | None = None) -> None:
         # The transport invokes this after all awaited preflight work. The
         # writer serializes this send decision against a durable stop request.
         with self.store._writer() as conn:
@@ -285,6 +299,41 @@ class TestnetCycle:
                 or self.clock_ms() >= plan.entry_deadline_ms
             ):
                 raise SubmissionPrevented("entry stopped before send")
+            if expected_ledger is None or local_ledger_marker(conn) != expected_ledger:
+                raise SubmissionPrevented(
+                    "local ledger changed after startup audit", reason_code="local_ledger_changed"
+                )
+
+    @staticmethod
+    def _audit_reason(result: StartupAuditResult) -> str:
+        return result.reason_codes[0] if result.reason_codes else "startup_audit_unavailable"
+
+    def _blocked_new_entry(
+        self, plan: CyclePlan, reason: str, audit: StartupAuditResult | None = None
+    ) -> dict[str, object]:
+        result: dict[str, object] = {
+            "cycle_id": plan.cycle_id,
+            "mode": "testnet",
+            "production_enabled": False,
+            "state": "BLOCKED",
+            "reason": reason,
+            "stop_entry_requested": False,
+            "entry_state": None,
+            "protection_state": None,
+            "owned_quantity": "0",
+            "dust_quantity": "0",
+            "unprotected_quantity": "0",
+            "coverage_observation_fresh": False,
+            "observed_at_ms": self.clock_ms(),
+        }
+        if audit is not None:
+            result.update(
+                {
+                    "audit_reason_codes": list(audit.reason_codes),
+                    "audit_reason_counts": dict(audit.reason_counts),
+                }
+            )
+        return result
 
     async def start(self, plan: CyclePlan) -> dict[str, object]:
         """Explicit new entry only. Caller must obtain Testnet confirmation first."""
@@ -293,6 +342,29 @@ class TestnetCycle:
             raise OrderError("cycle symbol differs from bound transport")
         if not 0 < plan.entry_deadline_ms - self.clock_ms() <= 600_000:
             raise OrderError("entry authority must expire within ten minutes")
+        existing_entry = self._record(plan.entry_id)
+        initial_marker: AccountMarker | None = None
+        if existing_entry is None:
+            with self.store.db.connect() as conn:
+                active = conn.execute(
+                    text(
+                        "SELECT cycle_id FROM testnet_cycles "
+                        "WHERE state NOT IN ('EXITED','NO_FILL','ABORTED')"
+                    )
+                ).first()
+            if active is not None:
+                raise OrderConflict("another unfinished Testnet cycle requires management")
+            try:
+                initial_audit = await audit_testnet_startup(
+                    self.store, self.transport, candidate=plan.entry()
+                )
+            except Exception:
+                return self._blocked_new_entry(plan, "startup_audit_unavailable")
+            if initial_audit.blocked:
+                return self._blocked_new_entry(
+                    plan, self._audit_reason(initial_audit), initial_audit
+                )
+            initial_marker = initial_audit.account_marker
         self._persist(plan)
         current = self.status(plan.cycle_id)
         if current["state"] in CLOSED_CYCLES:
@@ -302,6 +374,14 @@ class TestnetCycle:
         entry = self._record(plan.entry_id)
         if entry is None or entry.state is OrderState.INTENDED:
             try:
+                if initial_marker is None:
+                    initial_audit = await audit_testnet_startup(
+                        self.store, self.transport, candidate=plan.entry()
+                    )
+                    if initial_audit.blocked:
+                        self._set(plan.cycle_id, "BLOCKED", self._audit_reason(initial_audit))
+                        return self.status(plan.cycle_id)
+                    initial_marker = initial_audit.account_marker
                 metadata = await self.transport.prepare_submission(
                     plan.entry(),
                     reserve_protection=True,
@@ -310,10 +390,42 @@ class TestnetCycle:
                 )
                 if self.clock_ms() >= plan.entry_deadline_ms:
                     raise OrderError("entry authority expired during preflight")
+
+                final_ledger_marker: LedgerMarker | None = None
+
+                async def final_entry_audit() -> tuple[int, CapacityOrderMarker]:
+                    nonlocal final_ledger_marker
+                    try:
+                        result = await audit_testnet_startup(
+                            self.store,
+                            self.transport,
+                            candidate=plan.entry(),
+                            expected_account_marker=initial_marker,
+                        )
+                    except Exception as error:
+                        raise SubmissionPrevented(
+                            "startup audit unavailable", reason_code="startup_audit_unavailable"
+                        ) from error
+                    if result.blocked:
+                        reason = self._audit_reason(result)
+                        raise SubmissionPrevented("startup audit blocked", reason_code=reason)
+                    final_ledger_marker = result.ledger_marker
+                    return result.observed_at_ms, result.open_order_marker
+
                 self.orders.transport = _EntryTransport(
-                    self.transport, plan, lambda: self._authorize_send(plan)
+                    self.transport,
+                    plan,
+                    lambda: self._authorize_send(plan, final_ledger_marker),
+                    final_entry_audit,
                 )
-                await self.orders.submit(plan.entry(), metadata.filters)
+                submitted = await self.orders.submit(plan.entry(), metadata.filters)
+                if (
+                    submitted.state is OrderState.REJECTED
+                    and submitted.exchange_order_id is None
+                    and submitted.error not in {"SubmissionPrevented", "entry stopped before send"}
+                ):
+                    self._set(plan.cycle_id, "BLOCKED", submitted.error)
+                    return self.status(plan.cycle_id)
             except Exception as error:
                 self._set(plan.cycle_id, "BLOCKED", type(error).__name__)
                 return self.status(plan.cycle_id)
@@ -368,9 +480,16 @@ class TestnetCycle:
             if (
                 entry.state is OrderState.REJECTED
                 and entry.exchange_order_id is None
-                and entry.error in {"abandoned_before_send", "SubmissionPrevented"}
+                and entry.confirmed_quantity == 0
+                and entry.exchange_cumulative_quantity == 0
+                and entry.error
+                in AUDIT_REJECTION_REASONS | {"abandoned_before_send", "SubmissionPrevented"}
             ):
-                self._set(cycle_id, "ABORTED", "entry_not_sent")
+                self._set(
+                    cycle_id,
+                    "ABORTED",
+                    entry.error if entry.error in AUDIT_REJECTION_REASONS else "entry_not_sent",
+                )
                 return self.status(cycle_id)
             entry = await self.orders.reconcile(plan.entry_id)
             if entry.state not in TERMINAL_STATES:

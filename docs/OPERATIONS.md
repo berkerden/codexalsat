@@ -50,6 +50,18 @@ Bu makinede PostgreSQL fiziksel dump/restore uygulanmadı; üretim öncesi dış
 
 ## Kesinti
 
+Testnet için aynı yerel emir defterini koruyun ve önce salt okunur denetimi çalıştırın:
+
+```bash
+.venv/bin/python -m spotlab.testnet_cli audit
+```
+
+Engel varsa özgün çevrim/niyet üzerinden [Testnet uzlaştırma adımlarını](TESTNET.md)
+uygulayın. Denetim yeni girişleri engelleyebilir; mevcut çıkış yönetimini kapatmaz.
+Açık emir listesinde görünmemek iptal kanıtı değildir. Testnet sıfırlaması, eksik
+yerel kayıt veya farklı hesap şüphesinde defteri silmeyin; otomatik reset kurtarması
+henüz yoktur. Denetim hesabın bakiyelerini veya özel emir kimliklerini yazdırmaz.
+
 Eski/bozuk veri girişleri durdurur. Çıkış yönetimi yeni giriş araştırma servisinden
 bağımsızdır ve güncel bid/ask geldiğinde devam eder. Metadata veya mum servisi
 kesintisi güncel kotasyonla yapılabilen çıkışı bloke etmez. Yeni girişleri tekrar
