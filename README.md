@@ -101,6 +101,9 @@ Paper dolumları kotasyon miktarıyla sınırlanan simülasyonlardır; borsa kuy
 Testnet imzalama, borsa kuralları, emir sorgulama ve tek alış→OCO akışı ayrı modüldedir;
 [yerel kurulum ve sınırlar](docs/TESTNET.md). Panelden testnet emri gönderilmez.
 Süreli testnet denemesi ayrı komut satırında açık onay ister; stratejiyle yeni işlem açmaz.
+Yeni girişten önce açık emir/yerel kayıt kontrolü çalışır. Salt okunur `testnet_cli audit`
+komutu tutarsızlıkları özetler; mevcut emirleri iptal etmez ve hesap/reset uzlaştırmasının
+tamamlandığını tek başına kanıtlamaz.
 Canlı öncesinde gerçek testnet doğrulaması, kesintisiz giriş/koruma yönetimi, BNB
 komisyon muhasebesi, 30 takvim günü ileri paper gözlemi, yeterli etkin örnek ve
 bağımsız operasyonel onay gerekir. Yazılım testleri kârlılık kanıtı değildir.

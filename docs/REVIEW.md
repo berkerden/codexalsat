@@ -112,3 +112,26 @@ Bu testlerde borsa HTTP yanıtları sahtedir; yeni nesneler süreç yeniden baş
 benzetir. Ayrı anahtarlı deneme, yerelde atılan kabul yanıtlarından gerçek yeni
 süreçlerle NO_FILL kurtarmasını doğruladı; gerçek ağ kesintisi veya anahtarlı
 kısmi dolum kanıtı değildir. [Ayrıntılı kanıt ve sınırlar](TESTNET.md).
+
+## Başlangıç açık emir denetimi — 18 Ekim 2026
+
+Sol/high uygulama taslağı ve ana oturumun tamamladığı düzeltmeler, ayrı Astra/high
+bağlamında incelendi. İnceleme sırasında giderilen P2 bulguları:
+
+- Hiç gönderilmeyen girişin yeni denetim gerekçeleri yeniden başlatmada tanınmıyordu.
+  İzinli gerekçeler korunur; yönetici borsada olmayan emri sorgulamadan ABORTED'a geçer.
+- Son denetimin ağ çağrıları önceki ön kontrolü eskitebiliyordu. Yaş, saat sapması,
+  süre ve durdurma koşulları son çağrıdan sonra yeniden sınanır.
+- Katı denetim ayrıştırıcısı çıkış kapasite kontrolünü etkileyebiliyordu. Ayrı
+  ayrıştırma mevcut koruyucu yönetimi giriş engellerinden bağımsız tutar.
+- Kapasite ve yerel kayıtlar farklı anlardan gelebiliyordu. Borsa emir kapasitesi
+  son ön kontrolle karşılaştırılır; yerel kayıtlar yazıcı kilidi altında tutarlı
+  okunur ve gönderim yetkisinde tekrar karşılaştırılır.
+
+İstisna metni yerine yalnız izinli gerekçe kodları saklanır. OCO çocuk kimlikleri
+deterministik kimliklerle doğrulanır. Son bağımsız incelemede açık P1/P2 yok.
+Ana oturumun son hedefli paketi 131 başarılı, yerel PostgreSQL olmadığı için
+36 atlandı. Yeni HTTP sınırı testleri ayrıca Astra tarafından incelendi; ağ
+yanıtları MockTransport ile benzetilir. Salt okunur anahtarlı denetim geçti;
+bu paket yeni Testnet emri veya üretim isteği göndermedi. Hesap bağlama, tarihsel
+tam uzlaştırma ve otomatik reset kurtarması kapsam dışında kalır.

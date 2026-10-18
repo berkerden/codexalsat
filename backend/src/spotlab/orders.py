@@ -39,6 +39,30 @@ class OrderState(StrEnum):
 
 
 TERMINAL_STATES = {OrderState.FILLED, OrderState.CANCELED, OrderState.REJECTED}
+AUDIT_REJECTION_REASONS = frozenset(
+    {
+        "account_cannot_trade",
+        "account_snapshot_changed",
+        "candidate_remote_open",
+        "duplicate_remote_client_id",
+        "duplicate_remote_order_id",
+        "known_order_identity_mismatch",
+        "local_exchange_identity_invalid",
+        "local_ledger_changed",
+        "local_inventory_invalid",
+        "needs_reconciliation",
+        "oco_metadata_invalid",
+        "oco_metadata_missing",
+        "open_orders_changed_after_preflight",
+        "preflight_clock_drift_after_audit",
+        "preflight_stale_after_audit",
+        "residual_owned_inventory",
+        "startup_audit_unavailable",
+        "suspicious_orphan_order",
+        "terminal_order_still_open",
+        "terminal_trades_incomplete",
+    }
+)
 
 
 class OrderError(ValueError):
@@ -47,6 +71,12 @@ class OrderError(ValueError):
 
 class SubmissionPrevented(OrderError):
     """Transport guarantees it raised this before attempting an order mutation."""
+
+    def __init__(self, message: str, *, reason_code: str = "SubmissionPrevented") -> None:
+        super().__init__(message)
+        self.reason_code = (
+            reason_code if reason_code in AUDIT_REJECTION_REASONS else "SubmissionPrevented"
+        )
 
 
 class OrderConflict(OrderError):
@@ -207,7 +237,7 @@ def deterministic_client_order_id(intent_id: str, prefix: str = "spotlab") -> st
 class OrderStore:
     """Transactional SQL order store shared with the application's database URL."""
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, *, recover_submitting: bool = True) -> None:
         options: dict[str, Any] = {}
         if database_url.startswith("sqlite"):
             options["connect_args"] = {"check_same_thread": False, "timeout": 30}
@@ -215,19 +245,20 @@ class OrderStore:
         self._create_schema()
         # A process that died while awaiting submit cannot know whether the venue
         # accepted it. Query reconciliation is the sole safe recovery operation.
-        with self._writer() as conn:
-            conn.execute(
-                text(
-                    "UPDATE order_intents SET state=:unknown,error=:error,updated_at=:at "
-                    "WHERE state=:submitting"
-                ),
-                {
-                    "unknown": OrderState.UNKNOWN.value,
-                    "submitting": OrderState.SUBMITTING.value,
-                    "error": "process restarted during submission; exchange query required",
-                    "at": self._millis(),
-                },
-            )
+        if recover_submitting:
+            with self._writer() as conn:
+                conn.execute(
+                    text(
+                        "UPDATE order_intents SET state=:unknown,error=:error,updated_at=:at "
+                        "WHERE state=:submitting"
+                    ),
+                    {
+                        "unknown": OrderState.UNKNOWN.value,
+                        "submitting": OrderState.SUBMITTING.value,
+                        "error": "process restarted during submission; exchange query required",
+                        "at": self._millis(),
+                    },
+                )
 
     @staticmethod
     def _millis() -> int:
@@ -497,8 +528,10 @@ class OrderStore:
             )
             return True
 
-    def reject_unsent(self, intent_id: str) -> OrderRecord:
+    def reject_unsent(self, intent_id: str, reason: str = "SubmissionPrevented") -> OrderRecord:
         """Only for a transport's explicit guarantee that no POST was attempted."""
+        if reason not in AUDIT_REJECTION_REASONS:
+            reason = "SubmissionPrevented"
         with self._writer() as conn:
             row = self._locked_row(conn, intent_id)
             if row is None:
@@ -511,10 +544,10 @@ class OrderStore:
                 raise OrderInvariantError("cannot reject an intent with exchange evidence")
             conn.execute(
                 text(
-                    "UPDATE order_intents SET state='REJECTED',error='SubmissionPrevented',"
+                    "UPDATE order_intents SET state='REJECTED',error=:error,"
                     "updated_at=:at WHERE intent_id=:id"
                 ),
-                {"id": intent_id, "at": self._millis()},
+                {"id": intent_id, "at": self._millis(), "error": reason},
             )
             current = self._locked_row(conn, intent_id)
             assert current is not None
@@ -771,8 +804,8 @@ class OrderLifecycle:
             return self.store.get(request.intent_id)
         try:
             update = await self.transport.submit(request)
-        except SubmissionPrevented:
-            return self.store.reject_unsent(request.intent_id)
+        except SubmissionPrevented as error:
+            return self.store.reject_unsent(request.intent_id, error.reason_code)
         except (TimeoutError, RetryableTransportError) as error:
             return self.store.mark_unknown(request.intent_id, self._transport_error_reason(error))
         except BaseException as error:
