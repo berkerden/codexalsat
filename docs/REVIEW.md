@@ -162,3 +162,29 @@ emir/dolum/koruma/çevrim satırları değişmedi. Bu paket borsada değişiklik
 Hesap bağlama eski kayıtların sahipliğini veya reset dönemini kendiliğinden kanıtlamaz.
 Kalıcı geçmiş kaybı engeli iptal ve yeni korumayı da durdurur; doğrulanmış sorgular
 sürer. Eski defter geçişi, engel çözümü ve otomatik reset kurtarması henüz yoktur.
+
+
+## Eski defterin doğrulanmış geçişi — 19 Ekim 2026
+
+Astra/high sözleşmesi ve ilk kaynak incelemesi, Sol/high uygulamasıyla yürütüldü.
+Her iki oturum kullanım sınırına ulaştı; kalan düzeltmeler ve testler ana oturumda
+tamamlandı. Bağımsız son inceleme tamamlandı iddiası yoktur.
+
+İlk incelemede bulunan iki geçerli akış hatası giderildi: bağımsız LIMIT emrinin
+`orderListId=-1` değeri reddediliyordu; EXITED çevriminde koruma zarfı ile emir
+farklı türlerde karşılaştırılıyordu. Ayrıca terminal durum/miktar tutarlılığı,
+OCO liste zamanı ve kapanışı, çevrimin stop fiyatı, kilit sonrası güncellik ve açık
+emirlerde OCO çocuk/liste sayısal kimlik kontrolü tamamlandı. Boş ama önceden var
+olan geçiş makbuzu tablosu otomatik kullanılmaz; tutarsız durum olarak engellenir.
+
+Sabit Testnet adresli ayrı okuyucu yalnız GET gönderir. Tam dolum kümeleri ve
+komisyonlar eşleşmeden bağlama yapılmaz. Testler eksik/fazla/değişmiş dolumu,
+farklı hesap kimliğini, kayıp geçmişi, yanlış emir/OCO şartlarını, açık çocuk
+emirleri, yerel kayıt yarışını, kilit beklerken süre aşımını ve makbuz yazımı
+hatasında bağlamanın da geri alınmasını sınar. Önizleme, açık uygulama seçimi,
+yeniden açma ve dolum sayfalaması da sınanır. PostgreSQL varyantları CI'a bırakılır.
+Son yerel geçiş paketi 50 başarılı; 49 PostgreSQL varyantı atlandı. Tam backend
+paketi 327 başarılı, 144 atlandı; lint ve strict tip kontrolü geçti. Anahtarlı
+önizleme ve uygulama geçti, yedek alındı, tarihsel satırlar değişmedi; ardından
+normal başlangıç denetimi de geçti. Bu kapsam üretim izni, reset kurtarması veya
+strateji kârlılığı kanıtı değildir.

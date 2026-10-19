@@ -71,6 +71,15 @@ engeli aşmak için defteri silmeyin veya boş bir veritabanına geçmeyin. Salt
 yerel durum ve hesap ön kontrolü kullanılabilir. API anahtarının değişmemesi,
 Testnet sıfırlaması olmadığını kanıtlamaz.
 
+Tümü kapanmış, dolumları tamamlanmış ve net bot envanteri sıfır olan eski defter
+için önce `testnet_cli migrate-legacy` kontrolünü çalıştırın. Bütün eski emirler,
+OCO ayakları ve dolum/komisyon kayıtları aynı hesabın borsa geçmişiyle eşleşmelidir.
+Başarılı kontrolden sonra tutarlı veritabanı yedeği alın. `migrate-legacy
+--confirm-testnet` aynı doğrulamayı yeniden yapar; değişmemiş deftere yalnız hesap
+bağlaması ve geçiş kanıtı yazar. Ardından `testnet_cli audit` çalıştırın.
+[Tam komutlar ve desteklenmeyen durumlar](TESTNET.md#verified-migration-of-a-historical-unbound-ledger).
+Eksik tarihçe, açık pozisyon veya kalıcı hesap olayı bu yolla temizlenmez.
+
 `account_history_missing`, daha önce borsada doğrulanmış bir emir/liste artık
 bulunamadığında kalıcı olarak kaydedilir. Bu durumda aynı hesap doğrulansa bile
 iptal ve yeni koruma dahil tüm emir değişiklikleri engellenir; doğrulanmış salt

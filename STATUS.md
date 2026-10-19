@@ -1,4 +1,4 @@
-# Durum — 2026-10-18
+# Durum — 2026-10-19
 
 Yerel kaynak gerçek `berkerden/codexalsat` clone'udur. Public depo kullanılır.
 PR #3 araştırma/paper sürümünü main’e taşıdı; issue #2 canlı öncesi kalan işleri izler.
@@ -46,24 +46,33 @@ PR #4 testnet temelini, PR #5 süreli alış→OCO çevrimini main’e taşıdı
   Mevcut eski defter anahtarlı kontrolde migration_required verdi; tarihsel emir,
   dolum, koruma ve çevrim kayıtlarının değişmediği doğrulandı. Bu defterin emir
   işlemleri doğrulanmış geçiş tamamlanana kadar engellidir; yeni emir gönderilmedi.
+  19 Ekim’de ayrı, yalnız GET kullanan eski defter doğrulayıcısı eklendi. Kapanmış,
+  envanteri sıfır olan kayıtlar emir/OCO şartları ve eksiksiz dolum/komisyon kümeleriyle
+  eşleşirse tek işlemde hesap bağlaması ve yerel doğrulama makbuzu yazılır. Kilit altında
+  tüm yerel kayıtlar yeniden karşılaştırılır; geçmiş satırlar ve süreler değiştirilmez.
+  Anahtarlı önizleme 4 emir, 2 dolum, 3 kapanmış çevrimi doğruladı. Özel SQLite yedeği
+  alındı; yeniden doğrulanan geçiş tamamlandı ve tarihsel satırlar birebir korundu.
+  Sonraki normal başlangıç denetimi hesap bağlaması doğrulanmış olarak geçti;
+  borsaya yeni emir veya iptal gönderilmedi.
 - A7: ayrı Astra bağlamında kritik inceleme ve hedefli tekrar doğrulama yapıldı;
   kapsam içindeki P1 bulguları giderildi. [İnceleme kaydı](docs/REVIEW.md).
 - A8: temiz GitHub clone'unda kurulum, iki sunucunun başlatılması ve supervisor
   kapanınca iki portun da serbest kalması doğrulandı. Kurtarma testleri ve
   [operasyon](docs/OPERATIONS.md) belgesi mevcut. Docker bu makinede yok.
 
-Önceki ana sürüm PR #10 CI’da 316 backend testi (SQLite + PostgreSQL 16),
+Önceki ana sürüm PR #11 CI’da 372 backend testi (SQLite + PostgreSQL 16),
 5 frontend birim testi, 2 tarayıcı akışı, lint/tip/build ve güvenlik kontrollerini geçti.
-18 Ekim hesap bağlamasının tam yerel kontrolü: 277 başarılı, 95 PostgreSQL
-varyantı servis olmadığı için atlandı; lint ve tip kontrolü geçti. CI sonucu ilgili PR'dadır. Ayrı Astra/high
-incelemesinin bulguları giderildi; kapsam içinde açık P1/P2 yok. Sol/high kullanım
-sınırına ulaştıktan sonra kalan düzeltme ve testler ana oturumda tamamlandı.
+19 Ekim eski defter geçişinin yerel kontrolü: 327 başarılı, PostgreSQL servisi olmadığı
+için 144 varyant atlandı; lint ve strict tip kontrolü başarılı. Yeni geçiş paketi
+50 başarılı / 49 PostgreSQL varyantı atlandı. CI sonucu ilgili PR'da kaydedilir.
+Astra/high ilk incelemesi ve Sol/high uygulaması kullanım sınırına ulaştı; kalan
+düzeltme ve testler ana oturumda tamamlandı. Bağımsız son inceleme tamamlanmadı.
 
 Gerçek tarayıcıda BTC/SOL, periyot değişimi, araştırma formu, sanal oturum başlatma/durdurma,
 canlı mod kilidi ve 390×844 mobil menü/durdurma çubuğu kontrol edildi. Deneme paper oturumu durduruldu, açık pozisyon yok.
 Bu kısa kontrol ileri gözlem süresi yerine geçmez.
 
-Canlı **kapalı**. Eksikler: eski defterin doğrulanmış hesap geçişi, anahtarlı testnet
+Canlı **kapalı**. Eksikler: geçiş paketinin bağımsız son incelemesi, anahtarlı testnet
 kısmi dolum/hata senaryoları, stratejiyle sürekli
 giriş ve kesintisiz koruma/izleme entegrasyonu, hesap çapında sahipsiz emir ve reset kurtarma, BNB komisyon muhasebesi, pozisyon içi portföy maksimum düşüşü, 30 takvim günü ileri paper,
 yeterli ekonomik avantaj, üretim operasyon değerlendirmesi. PostgreSQL mantıksal

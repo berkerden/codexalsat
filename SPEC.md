@@ -73,8 +73,10 @@ penceresi karar zamanından önce bitmeli; örnekler örtüşmemeli. Benzerlik o
    bağımsız kritik inceleme tamamlanmadan canlı etkinleştirme engellenir.
 10. Push/merge bot başlatmaz/güncellemez. Canlı sürüm sabit commit, değişimi ayrı onay.
 11. Testnet emir defteri tek bir borsa ortamı ve doğrulanmış hesap kimliğine bağlanır.
-    Bağlama yalnız hiçbir emir, dolum, koruma veya çevrim kaydı olmayan defterde yapılır;
-    eski kayıtlara mevcut hesabın kimliği kendiliğinden atanmaz. Hesap doğrulanamıyorsa
+    İlk kurulum bağlaması yalnız boş defterde yapılır. Eski kayıtlara mevcut hesabın
+    kimliği kendiliğinden atanmaz: ayrı geçiş işlemi tüm kapanmış emir/koruma/dolum
+    kanıtını aynı doğrulanmış hesaptan eşleştirmeli, sıfır net envanteri doğrulamalı
+    ve değişmemiş deftere bağlama ile geçiş kaydını tek işlemde yazmalıdır. Hesap doğrulanamıyorsa
     emir sorgusu, gönderimi ve iptali engellenir; başka hesabın verisi eski deftere işlenmez.
 12. Aynı hesap kimliği Testnet sıfırlamasının çözüldüğünü kanıtlamaz. Kaybolan geçmiş,
     iptal veya sıfır envanter olarak yorumlanmaz. Özgün kayıtlar korunur; belirsizliği
