@@ -105,7 +105,8 @@ Yeni girişten önce açık emir/yerel kayıt kontrolü çalışır. Salt okunur
 komutu tutarsızlıkları özetler; mevcut emirleri iptal etmez ve hesap/reset uzlaştırmasının
 tamamlandığını tek başına kanıtlamaz.
 Emir yolları kalıcı hesap bağlaması ister. Eski, bağlanmamış defterler doğrulanmış
-geçiş bekler; kayıtlar silinmez veya mevcut hesaba kendiliğinden atanmaz. Hesap
+geçiş ister. Kapanmış ve kalan envanteri sıfır olan defterler için `migrate-legacy`
+önce salt okunur doğrulama, açık onayla yerel bağlama yapar; tarihsel satırlar korunur. Hesap
 uyuşmazlığı ve doğrulanmış geçmişin kaybı emir işlemlerini engeller.
 Canlı öncesinde gerçek testnet doğrulaması, kesintisiz giriş/koruma yönetimi, BNB
 komisyon muhasebesi, 30 takvim günü ileri paper gözlemi, yeterli etkin örnek ve

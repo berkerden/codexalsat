@@ -14,6 +14,7 @@ import stat
 from pathlib import Path
 from typing import Literal, cast
 
+from spotlab.legacy_migration import LegacyMigrationError, LegacyTestnetReader, migrate_legacy
 from spotlab.orders import AccountBindingError, OrderLifecycle, OrderStore
 from spotlab.protection import ProtectionLifecycle
 from spotlab.startup_audit import audit_testnet_startup
@@ -76,6 +77,13 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
         finally:
             store.db.dispose()
     credentials = load_credentials(args.credentials)
+    if args.command == "migrate-legacy":
+        store = OrderStore(args.database, recover_submitting=False)
+        try:
+            async with LegacyTestnetReader(credentials) as reader:
+                return await migrate_legacy(store, reader, apply=args.confirm_testnet)
+        finally:
+            store.db.dispose()
     async with BinanceTestnetTransport(
         cast(Literal["BTCUSDT", "SOLUSDT"], args.symbol), credentials=credentials
     ) as transport:
@@ -132,7 +140,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=["configure", "preflight", "status", "audit", "reconcile", "bind-account"],
+        choices=[
+            "configure",
+            "preflight",
+            "status",
+            "audit",
+            "reconcile",
+            "bind-account",
+            "migrate-legacy",
+        ],
     )
     parser.add_argument("--symbol", choices=["BTCUSDT", "SOLUSDT"], default="BTCUSDT")
     parser.add_argument("--credentials", type=Path, default=DEFAULT_CREDENTIAL_FILE)
@@ -162,7 +178,7 @@ def main() -> int:
                 {
                     "status": "blocked",
                     "reason": error.reason_code
-                    if isinstance(error, AccountBindingError)
+                    if isinstance(error, (AccountBindingError, LegacyMigrationError))
                     else type(error).__name__,
                     "production_enabled": False,
                 }

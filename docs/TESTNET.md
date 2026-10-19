@@ -85,8 +85,8 @@ Any original audit blocker still has to clear before a new entry can pass its ow
 This is a point-in-time open-order/ledger comparison, not complete historical account or trade
 reconciliation. Account binding establishes the observed account identity, not a reset generation.
 An empty snapshot cannot prove that a Testnet reset was reconciled. Arbitrary untracked client IDs
-cannot reliably be attributed to this app. Legacy-ledger migration, orphan/reset recovery and
-continuous unattended monitoring remain separate work.
+cannot reliably be attributed to this app. The separate legacy-ledger verifier is described below;
+orphan/reset recovery and continuous unattended monitoring remain separate work.
 
 ## Account binding and reset boundaries
 
@@ -100,7 +100,8 @@ or cycles. The check and binding write share the ledger writer lock. A historica
 a binding requires migration; a successful account request alone cannot establish that those
 old records belong to the currently selected account. Existing ledgers from earlier versions must
 be preserved, including closed cycles. Do not erase them, create replacement identifiers or choose
-a fresh database to work around this blocker. Verified historical migration is not yet implemented.
+a fresh database to work around this blocker. A separate verified migration handles only closed,
+fully acknowledged history with zero remaining bot inventory; see below.
 
 Account identity must be verified before order queries, submissions, cancellations and OCO
 management. Missing or malformed identity, account-query failure and UID mismatch fail closed.
@@ -141,7 +142,54 @@ ambiguous or acknowledged submissions never take that retry path.
 On 2026-10-18, the existing authenticated local ledger correctly returned `migration_required`.
 Its historical order, fill, protection and cycle rows were compared before and after and remained
 unchanged. No exchange order was submitted or canceled, and no binding was assigned to that legacy
-ledger. Historical migration is the next required step before its Testnet order operations resume.
+ledger. The migration below is required before that legacy ledger can pass the binding gate.
+
+## Verified migration of a historical unbound ledger
+
+`migrate-legacy` uses a separate fixed-host, GET-only reader. Normal order routes retain their
+binding checks throughout verification. Preview reads historical evidence and reports aggregate
+reason codes; it does not assign an account or modify existing order, fill, protection or cycle rows.
+
+```bash
+.venv/bin/python -m spotlab.testnet_cli migrate-legacy
+```
+
+The supported ledger must have no binding or unresolved account incident, acknowledged terminal
+orders with complete fills, structurally consistent closed cycles, and exactly zero remaining
+inventory per scope and symbol. Each ordinary order is matched to its authenticated exchange
+identity and terms. OCO verification checks the parent, both derived child identities and terminal
+states, prices and quantities. Complete authenticated trade sets must match local trade IDs,
+amounts and commissions exactly; a matching aggregate alone is insufficient. Missing history,
+unresolved submissions, unmatched protection payloads, residual dust or inconsistent evidence block
+the migration. Account-wide open orders are checked for known or suspicious bot identities;
+unrelated orders remain untouched.
+
+After a successful preview, preserve a consistent database backup before applying. The apply
+command performs the verification again; it does not trust a previous preview as authorization:
+
+```bash
+.venv/bin/python -m spotlab.testnet_cli migrate-legacy --confirm-testnet
+```
+
+The authenticated account identity must remain consistent throughout verification. Under the
+ledger writer lock, the entire relevant local snapshot is compared again before account binding
+and a verification receipt are inserted atomically. Historical rows, inventory, cycle stop flags
+and expired deadlines remain unchanged. The receipt records verification provenance locally; UID,
+private identifiers and trade data are not diagnostic output or Git artifacts.
+
+This establishes that all supported local history matched the currently authenticated account at
+verification time. It is not proof of a reset generation or complete history outside this ledger.
+It cannot recover history already removed by Testnet, clear a history-loss incident, migrate an
+active position or adopt unrelated orders. Successful migration does not start a trader, renew an
+entry authorization or enable production. A subsequent ordinary `audit` must still pass.
+
+On 2026-10-19, authenticated preview verified the existing local ledger: 4 orders, 2 fills,
+3 closed cycles and no unrelated open orders. A consistent SQLite backup was created with mode
+600. Apply repeated remote verification, then inserted the binding and receipt; every historical
+order, fill, protection and cycle row remained identical to the backup. No exchange mutation was
+sent. The subsequent ordinary startup audit passed with `account_binding_verified: true` and
+`reset_resolution_verified: false`. This is evidence for this closed ledger only, not continuous
+trading or reset recovery.
 
 ## Transport and identity
 
