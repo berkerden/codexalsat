@@ -104,6 +104,9 @@ Süreli testnet denemesi ayrı komut satırında açık onay ister; stratejiyle 
 Yeni girişten önce açık emir/yerel kayıt kontrolü çalışır. Salt okunur `testnet_cli audit`
 komutu tutarsızlıkları özetler; mevcut emirleri iptal etmez ve hesap/reset uzlaştırmasının
 tamamlandığını tek başına kanıtlamaz.
+Emir yolları kalıcı hesap bağlaması ister. Eski, bağlanmamış defterler doğrulanmış
+geçiş bekler; kayıtlar silinmez veya mevcut hesaba kendiliğinden atanmaz. Hesap
+uyuşmazlığı ve doğrulanmış geçmişin kaybı emir işlemlerini engeller.
 Canlı öncesinde gerçek testnet doğrulaması, kesintisiz giriş/koruma yönetimi, BNB
 komisyon muhasebesi, 30 takvim günü ileri paper gözlemi, yeterli etkin örnek ve
 bağımsız operasyonel onay gerekir. Yazılım testleri kârlılık kanıtı değildir.

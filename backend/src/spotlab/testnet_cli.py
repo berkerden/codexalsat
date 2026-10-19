@@ -14,7 +14,7 @@ import stat
 from pathlib import Path
 from typing import Literal, cast
 
-from spotlab.orders import OrderLifecycle, OrderStore
+from spotlab.orders import AccountBindingError, OrderLifecycle, OrderStore
 from spotlab.protection import ProtectionLifecycle
 from spotlab.startup_audit import audit_testnet_startup
 from spotlab.testnet import BinanceTestnetTransport, TestnetCredentials
@@ -57,7 +57,7 @@ def load_credentials(path: Path) -> TestnetCredentials:
 
 async def run(args: argparse.Namespace) -> dict[str, object]:
     if args.command == "status":
-        store = OrderStore(args.database)
+        store = OrderStore(args.database, recover_submitting=False)
         try:
             return {
                 "mode": "testnet",
@@ -79,6 +79,14 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     async with BinanceTestnetTransport(
         cast(Literal["BTCUSDT", "SOLUSDT"], args.symbol), credentials=credentials
     ) as transport:
+        if args.command == "bind-account":
+            store = OrderStore(args.database, recover_submitting=False)
+            try:
+                transport.attach_order_store(store)
+                await transport.bind_attached_empty_ledger()
+                return {"status": "bound", "production_enabled": False}
+            finally:
+                store.db.dispose()
         if args.command == "audit":
             store = OrderStore(args.database, recover_submitting=False)
             try:
@@ -123,13 +131,17 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "command", choices=["configure", "preflight", "status", "audit", "reconcile"]
+        "command",
+        choices=["configure", "preflight", "status", "audit", "reconcile", "bind-account"],
     )
     parser.add_argument("--symbol", choices=["BTCUSDT", "SOLUSDT"], default="BTCUSDT")
     parser.add_argument("--credentials", type=Path, default=DEFAULT_CREDENTIAL_FILE)
     parser.add_argument("--database", default="sqlite:///data/testnet-orders.sqlite")
     parser.add_argument("--intent", help="persisted intent ID, required for reconcile")
+    parser.add_argument("--confirm-testnet", action="store_true")
     args = parser.parse_args()
+    if args.command == "bind-account" and not args.confirm_testnet:
+        parser.error("bind-account requires --confirm-testnet; local binding only")
     if args.command == "reconcile" and not args.intent:
         parser.error("reconcile requires --intent")
     try:
@@ -147,7 +159,13 @@ def main() -> int:
         # Never print their message, traceback, account payload or chained cause.
         print(
             json.dumps(
-                {"status": "blocked", "reason": type(error).__name__, "production_enabled": False}
+                {
+                    "status": "blocked",
+                    "reason": error.reason_code
+                    if isinstance(error, AccountBindingError)
+                    else type(error).__name__,
+                    "production_enabled": False,
+                }
             )
         )
         return 1

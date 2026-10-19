@@ -6,9 +6,21 @@ from decimal import Decimal as D
 import httpx
 import pytest
 from backend.tests.test_orders import database_url as database_url
-from backend.tests.test_testnet import NOW, credentials, exchange_info, request, response_for_basics
+from backend.tests.test_testnet import (
+    NOW,
+    bind_transport,
+    credentials,
+    exchange_info,
+    request,
+    response_for_basics,
+)
 
-from spotlab.orders import OrderInvariantError, OrderStore, SubmissionPrevented
+from spotlab.orders import (
+    TESTNET_ACCOUNT_VENUE,
+    OrderInvariantError,
+    OrderStore,
+    SubmissionPrevented,
+)
 from spotlab.startup_audit import audit_testnet_startup
 from spotlab.testnet import BinanceTestnetTransport
 
@@ -67,6 +79,8 @@ async def test_final_audit_cannot_outlive_preflight_or_authority(database_url, f
         clock_ms=lambda: current,
     ) as wire:
         store = OrderStore(database_url)
+        store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
+        wire.attach_order_store(store)
 
         async def audit():
             nonlocal current, server_offset, audit_finished
@@ -136,6 +150,7 @@ async def test_audit_rejects_malformed_remote_identity_without_mutation(field, v
         mock_transport=httpx.MockTransport(handle),
         clock_ms=lambda: NOW,
     ) as wire:
+        bind_transport(wire)
         with pytest.raises((OrderInvariantError, ValueError)):
             await wire.account_wide_snapshot()
     assert set(calls) == {"GET"}
@@ -168,6 +183,7 @@ async def test_pending_manual_order_does_not_block_protective_preflight():
         mock_transport=httpx.MockTransport(handle),
         clock_ms=lambda: NOW,
     ) as wire:
+        bind_transport(wire)
         with pytest.raises(OrderInvariantError):
             await wire.account_wide_snapshot()
         await wire.prepare_submission(
@@ -186,6 +202,7 @@ def test_audit_cli_nonzero_and_private_payloads_stay_hidden(tmp_path, monkeypatc
 
     database = "sqlite:///" + str(tmp_path / "audit.sqlite")
     store = OrderStore(database)
+    store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
     store.create_or_get(request())
     store.claim_submission(request().intent_id)
     store.db.dispose()
@@ -232,6 +249,7 @@ def test_audit_cli_nonzero_and_private_payloads_stay_hidden(tmp_path, monkeypatc
         assert result["untracked_other_order_count"] == 1
     assert set(methods) == {"GET"}
     observed = OrderStore(database, recover_submitting=False)
+    observed.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
     try:
         assert observed.get(request().intent_id).state.value == "SUBMITTING"
     finally:

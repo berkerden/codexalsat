@@ -154,6 +154,16 @@ class _EntryTransport:
             protection_stop=self.plan.stop_price,
         )
 
+    async def verify_account_binding(self) -> None:
+        verify = getattr(self.transport, "verify_account_binding", None)
+        if verify is not None:
+            await verify()
+
+    async def verify_mutation_allowed(self) -> None:
+        verify = getattr(self.transport, "verify_mutation_allowed", None)
+        if verify is not None:
+            await verify()
+
     async def query(self, client_order_id: str) -> ExchangeUpdate:
         return await self.transport.query(client_order_id)
 
@@ -185,6 +195,11 @@ class TestnetCycle:
                     "updated_at BIGINT NOT NULL)"
                 )
             )
+
+    async def _verify_account_binding(self) -> None:
+        verify = getattr(self.transport, "verify_account_binding", None)
+        if verify is not None:
+            await verify()
 
     def _plan(self, cycle_id: str) -> CyclePlan:
         with self.store.db.connect() as conn:
@@ -342,6 +357,7 @@ class TestnetCycle:
             raise OrderError("cycle symbol differs from bound transport")
         if not 0 < plan.entry_deadline_ms - self.clock_ms() <= 600_000:
             raise OrderError("entry authority must expire within ten minutes")
+        await self._verify_account_binding()
         existing_entry = self._record(plan.entry_id)
         initial_marker: AccountMarker | None = None
         if existing_entry is None:
@@ -435,6 +451,7 @@ class TestnetCycle:
         self, cycle_id: str, *, allow_mutations: bool = False, stop_entry: bool = False
     ) -> dict[str, object]:
         """Reconcile existing intents; optional management never creates a BUY."""
+        await self._verify_account_binding()
         plan = self._plan(cycle_id)
         with self.store._writer() as conn:
             if stop_entry:

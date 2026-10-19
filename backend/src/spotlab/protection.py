@@ -20,6 +20,7 @@ from spotlab.orders import (
     OrderRequest,
     OrderState,
     OrderStore,
+    SubmissionPrevented,
     deterministic_client_order_id,
 )
 from spotlab.testnet import (
@@ -73,6 +74,9 @@ class ProtectionLifecycle:
     def __init__(self, store: OrderStore, transport: BinanceTestnetTransport) -> None:
         self.store = store
         self.transport = transport
+        attach = getattr(transport, "attach_order_store", None)
+        if attach is not None:
+            attach(store)
         with store._writer() as conn:
             conn.execute(
                 text(
@@ -81,6 +85,12 @@ class ProtectionLifecycle:
                     "above_id VARCHAR(36) NOT NULL UNIQUE,below_id VARCHAR(36) NOT NULL UNIQUE)"
                 )
             )
+
+    async def _verify_account_binding(self, *, mutation: bool = False) -> None:
+        name = "verify_mutation_allowed" if mutation else "verify_account_binding"
+        verify = getattr(self.transport, name, None)
+        if verify is not None:
+            await verify()
 
     def _persist_payload(self, request: ProtectionRequest) -> None:
         # Payload precedes parent creation; an orphan payload is safe and has no
@@ -139,6 +149,7 @@ class ProtectionLifecycle:
         order = request.order
         if order.symbol != self.transport.symbol:
             raise OrderError("protection symbol does not match transport")
+        await self._verify_account_binding(mutation=True)
         # Local checks precede reservation/claim. Failure here proves no POST was
         # attempted, so a later explicit management pass may retry the same plan.
         try:
@@ -176,13 +187,18 @@ class ProtectionLifecycle:
                     "belowClientOrderId": request.below_id,
                     "newOrderRespType": "RESULT",
                 },
+                _before_wire_send=self.transport.require_fresh_preflight,
             )
             return (await self.reconcile(order.intent_id)).order
+        except SubmissionPrevented:
+            self.store.release_unsent_claim(order.intent_id)
+            raise
         except BaseException as error:
             self.store.mark_unknown(order.intent_id, type(error).__name__)
             raise
 
     async def reconcile(self, intent_id: str) -> ProtectionObservation:
+        await self._verify_account_binding()
         try:
             request = self._load(intent_id)
             order = request.order

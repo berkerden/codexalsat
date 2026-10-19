@@ -75,6 +75,8 @@ class StartupAuditResult:
     ledger_marker: LedgerMarker
     open_order_marker: CapacityOrderMarker
     observed_at_ms: int
+    account_binding_verified: bool = False
+    remote_snapshot_observed: bool = True
 
     @property
     def blocked(self) -> bool:
@@ -92,11 +94,16 @@ class StartupAuditResult:
             "reason_codes": list(self.reason_codes),
             "reason_counts": dict(self.reason_counts),
             "local_intent_count": self.local_intents,
-            "remote_open_order_count": self.remote_open_orders,
-            "untracked_other_order_count": self.untracked_other_orders,
-            "observed_at_ms": self.observed_at_ms,
+            "remote_open_order_count": self.remote_open_orders
+            if self.remote_snapshot_observed
+            else None,
+            "untracked_other_order_count": self.untracked_other_orders
+            if self.remote_snapshot_observed
+            else None,
+            "observed_at_ms": self.observed_at_ms if self.remote_snapshot_observed else None,
+            "remote_snapshot_observed": self.remote_snapshot_observed,
             "scope": "account_open_orders_vs_local_ledger",
-            "account_binding_verified": False,
+            "account_binding_verified": self.account_binding_verified,
             "reset_resolution_verified": False,
         }
 
@@ -146,6 +153,10 @@ def local_ledger_marker(conn: Connection) -> LedgerMarker:
             text("SELECT * FROM protection_intents ORDER BY intent_id")
         ).mappings()
         markers.extend(("protection", *tuple(row.values())) for row in protection_rows)
+    for table in ("ledger_account_binding", "ledger_account_incidents"):
+        if inspect(conn).has_table(table):
+            rows = conn.execute(text(f"SELECT * FROM {table} ORDER BY 1")).mappings()
+            markers.extend((table, *tuple(row.values())) for row in rows)
     return tuple(markers)
 
 
@@ -333,6 +344,26 @@ async def audit_testnet_startup(
 ) -> StartupAuditResult:
     """Compare the complete local ledger with one account-wide remote snapshot."""
 
+    verified = False
+    attach = getattr(transport, "attach_order_store", None)
+    if attach is not None:
+        attach(store)
+        reason = await transport.account_binding_reason()
+        if reason is not None:
+            records, _payloads, _inventory, ledger_marker = _local_snapshot(store)
+            return StartupAuditResult(
+                ((reason, 1),),
+                len(records),
+                0,
+                0,
+                (),
+                ledger_marker,
+                (),
+                store._millis(),
+                account_binding_verified=reason == "account_history_missing",
+                remote_snapshot_observed=False,
+            )
+        verified = True
     snapshot = await transport.account_wide_snapshot()
     reasons: Counter[str] = Counter()
     records, payloads, inventory, ledger_marker = _local_snapshot(store)
@@ -399,4 +430,5 @@ async def audit_testnet_startup(
         ledger_marker,
         tuple(sorted(item.capacity_key for item in snapshot.open_orders)),
         snapshot.account.observed_at_ms,
+        account_binding_verified=verified,
     )

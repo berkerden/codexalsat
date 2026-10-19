@@ -25,6 +25,7 @@ ZERO = D(0)
 # lock is intentionally global: reservations span multiple intent rows, so a
 # per-intent FOR UPDATE lock cannot protect two new SELL intents in one scope.
 POSTGRES_WRITER_LOCK_ID = 7_311_735_331
+TESTNET_ACCOUNT_VENUE = "binance_spot_testnet"
 
 
 class OrderState(StrEnum):
@@ -85,6 +86,14 @@ class OrderConflict(OrderError):
 
 class OrderInvariantError(OrderError):
     """Exchange data conflicts with the durable order ledger."""
+
+
+class AccountBindingError(OrderError):
+    """A sanitized account-binding failure safe for operator diagnostics."""
+
+    def __init__(self, reason_code: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(reason_code)
 
 
 class InsufficientInventory(OrderError):
@@ -243,22 +252,8 @@ class OrderStore:
             options["connect_args"] = {"check_same_thread": False, "timeout": 30}
         self.db: Engine = create_engine(database_url, **options)
         self._create_schema()
-        # A process that died while awaiting submit cannot know whether the venue
-        # accepted it. Query reconciliation is the sole safe recovery operation.
         if recover_submitting:
-            with self._writer() as conn:
-                conn.execute(
-                    text(
-                        "UPDATE order_intents SET state=:unknown,error=:error,updated_at=:at "
-                        "WHERE state=:submitting"
-                    ),
-                    {
-                        "unknown": OrderState.UNKNOWN.value,
-                        "submitting": OrderState.SUBMITTING.value,
-                        "error": "process restarted during submission; exchange query required",
-                        "at": self._millis(),
-                    },
-                )
+            self.recover_submitting()
 
     @staticmethod
     def _millis() -> int:
@@ -303,6 +298,19 @@ class OrderStore:
                         "NOT NULL DEFAULT '0'"
                     )
                 )
+            conn.execute(
+                text(
+                    "CREATE TABLE IF NOT EXISTS ledger_account_binding ("
+                    "singleton_id INTEGER PRIMARY KEY,venue VARCHAR(64) NOT NULL,"
+                    "account_uid VARCHAR(128) NOT NULL,created_at BIGINT NOT NULL)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE TABLE IF NOT EXISTS ledger_account_incidents ("
+                    "reason VARCHAR(64) PRIMARY KEY,created_at BIGINT NOT NULL)"
+                )
+            )
 
     @contextmanager
     def _writer(self) -> Iterator[Connection]:
@@ -330,6 +338,178 @@ class OrderStore:
             {"intent_id": intent_id},
         ).mappings()
         return result.one_or_none()
+
+    @staticmethod
+    def _validate_account_identity(venue: str, account_uid: int) -> None:
+        if venue != TESTNET_ACCOUNT_VENUE:
+            raise AccountBindingError("account_binding_invalid")
+        if isinstance(account_uid, bool) or not isinstance(account_uid, int) or account_uid <= 0:
+            raise AccountBindingError("account_identity_invalid")
+
+    @staticmethod
+    def _binding_row(conn: Connection) -> RowMapping | None:
+        return (
+            conn.execute(
+                text("SELECT venue,account_uid FROM ledger_account_binding WHERE singleton_id=1")
+            )
+            .mappings()
+            .one_or_none()
+        )
+
+    @staticmethod
+    def _has_legacy_evidence(conn: Connection) -> bool:
+        for table in ("order_intents", "order_fills", "protection_intents", "testnet_cycles"):
+            if (
+                inspect(conn).has_table(table)
+                and conn.execute(text(f"SELECT 1 FROM {table} LIMIT 1")).first() is not None
+            ):
+                return True
+        return False
+
+    def account_binding_reason(self) -> str | None:
+        """Return a sanitized local binding status without exposing identity data."""
+
+        with self._writer() as conn:
+            row = self._binding_row(conn)
+            if row is None:
+                return (
+                    "migration_required"
+                    if self._has_legacy_evidence(conn)
+                    else "account_binding_required"
+                )
+            try:
+                uid = int(row["account_uid"])
+            except (TypeError, ValueError):
+                return "account_binding_invalid"
+            if row["venue"] != TESTNET_ACCOUNT_VENUE or uid <= 0 or str(uid) != row["account_uid"]:
+                return "account_binding_invalid"
+            incident = conn.execute(
+                text(
+                    "SELECT reason FROM ledger_account_incidents ORDER BY created_at,reason LIMIT 1"
+                )
+            ).scalar_one_or_none()
+            return str(incident) if incident is not None else None
+
+    def bind_account(self, venue: str, account_uid: int) -> None:
+        """Explicitly bind a completely empty ledger to one immutable Testnet UID."""
+
+        self._validate_account_identity(venue, account_uid)
+        with self._writer() as conn:
+            row = self._binding_row(conn)
+            if row is not None:
+                if row["venue"] != venue or row["account_uid"] != str(account_uid):
+                    raise AccountBindingError("account_binding_mismatch")
+                return
+            if self._has_legacy_evidence(conn):
+                raise AccountBindingError("migration_required")
+            conn.execute(
+                text(
+                    "INSERT INTO ledger_account_binding "
+                    "(singleton_id,venue,account_uid,created_at) VALUES (1,:venue,:uid,:at)"
+                ),
+                {"venue": venue, "uid": str(account_uid), "at": self._millis()},
+            )
+
+    def require_account_binding(self, venue: str, account_uid: int) -> None:
+        self._validate_account_identity(venue, account_uid)
+        with self._writer() as conn:
+            row = self._binding_row(conn)
+            if row is None:
+                reason = (
+                    "migration_required"
+                    if self._has_legacy_evidence(conn)
+                    else "account_binding_required"
+                )
+                raise AccountBindingError(reason)
+            if row["venue"] != venue or row["account_uid"] != str(account_uid):
+                raise AccountBindingError("account_binding_mismatch")
+
+    def record_account_incident(self, reason: str) -> None:
+        if reason != "account_history_missing":
+            raise ValueError("unsupported account incident")
+        with self._writer() as conn:
+            if self._binding_row(conn) is None:
+                raise AccountBindingError("account_binding_required")
+            if self.db.dialect.name == "postgresql":
+                statement = (
+                    "INSERT INTO ledger_account_incidents (reason,created_at) "
+                    "VALUES (:reason,:at) ON CONFLICT (reason) DO NOTHING"
+                )
+            else:
+                statement = (
+                    "INSERT OR IGNORE INTO ledger_account_incidents (reason,created_at) "
+                    "VALUES (:reason,:at)"
+                )
+            conn.execute(text(statement), {"reason": reason, "at": self._millis()})
+
+    def has_acknowledged_order(
+        self, client_order_id: object, symbol: str, order_id: object, list_id: object
+    ) -> bool:
+        """Missing unacknowledged intents can be propagation delay, not history loss."""
+
+        def numeric(value: object) -> str | None:
+            if type(value) is int and value >= 0:
+                return str(value)
+            if isinstance(value, str) and value.isascii() and value.isdecimal():
+                return str(int(value))
+            return None
+
+        numeric_order = numeric(order_id)
+        numeric_list = numeric(list_id)
+        with self.db.connect() as conn:
+            rows = (
+                conn.execute(
+                    text(
+                        "SELECT client_order_id,exchange_order_id,intent_id FROM order_intents "
+                        "WHERE exchange_order_id IS NOT NULL AND symbol=:symbol"
+                    ),
+                    {"symbol": symbol},
+                )
+                .mappings()
+                .all()
+            )
+            for row in rows:
+                if client_order_id == row["client_order_id"]:
+                    return True
+                if (
+                    numeric_order is not None
+                    and row["exchange_order_id"] == f"{symbol}:{numeric_order}"
+                ):
+                    return True
+                if (
+                    numeric_list is not None
+                    and row["exchange_order_id"] == f"oco:{symbol}:{numeric_list}"
+                ):
+                    return True
+                if isinstance(client_order_id, str) and inspect(conn).has_table(
+                    "protection_intents"
+                ):
+                    if conn.execute(
+                        text(
+                            "SELECT 1 FROM protection_intents WHERE intent_id=:intent "
+                            "AND (above_id=:client OR below_id=:client)"
+                        ),
+                        {"intent": row["intent_id"], "client": client_order_id},
+                    ).first():
+                        return True
+            return False
+
+    def recover_submitting(self) -> None:
+        """Make interrupted submits query-only after account identity is verified."""
+
+        with self._writer() as conn:
+            conn.execute(
+                text(
+                    "UPDATE order_intents SET state=:unknown,error=:error,updated_at=:at "
+                    "WHERE state=:submitting"
+                ),
+                {
+                    "unknown": OrderState.UNKNOWN.value,
+                    "submitting": OrderState.SUBMITTING.value,
+                    "error": "process restarted during submission; exchange query required",
+                    "at": self._millis(),
+                },
+            )
 
     @staticmethod
     def _request_from_row(row: RowMapping) -> OrderRequest:
@@ -390,6 +570,7 @@ class OrderStore:
             clauses.append("symbol=:symbol")
             params["symbol"] = symbol
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
+
         with self.db.connect() as conn:
             rows = conn.execute(
                 text("SELECT * FROM order_intents" + where + " ORDER BY created_at,intent_id"),
@@ -527,6 +708,27 @@ class OrderStore:
                 },
             )
             return True
+
+    def release_unsent_claim(self, intent_id: str) -> None:
+        """Retry only when the transport proved no mutation was attempted."""
+        with self._writer() as conn:
+            row = self._locked_row(conn, intent_id)
+            if row is None:
+                raise KeyError(intent_id)
+            record = self._record_from_row(row)
+            if (
+                record.state is OrderState.SUBMITTING
+                and record.exchange_order_id is None
+                and record.confirmed_quantity == 0
+                and record.exchange_cumulative_quantity == 0
+            ):
+                conn.execute(
+                    text(
+                        "UPDATE order_intents SET state='INTENDED',updated_at=:at "
+                        "WHERE intent_id=:id"
+                    ),
+                    {"at": self._millis(), "id": intent_id},
+                )
 
     def reject_unsent(self, intent_id: str, reason: str = "SubmissionPrevented") -> OrderRecord:
         """Only for a transport's explicit guarantee that no POST was attempted."""
@@ -774,8 +976,17 @@ class OrderLifecycle:
     """Coordinates durable local transitions with an injected async transport."""
 
     def __init__(self, database_url: str, transport: OrderTransport) -> None:
-        self.store = OrderStore(database_url)
         self.transport = transport
+        attach = getattr(transport, "attach_order_store", None)
+        self.store = OrderStore(database_url, recover_submitting=attach is None)
+        if attach is not None:
+            attach(self.store)
+
+    async def _verify_account_binding(self, *, mutation: bool = False) -> None:
+        name = "verify_mutation_allowed" if mutation else "verify_account_binding"
+        verify = getattr(self.transport, name, None)
+        if verify is not None:
+            await verify()
 
     @staticmethod
     def _transport_error_reason(error: BaseException) -> str:
@@ -797,6 +1008,7 @@ class OrderLifecycle:
     async def submit(self, request: OrderRequest, filters: ExchangeFilters) -> OrderRecord:
         self._reject_oco(request)
         validate_order_filters(request.quantity, request.price, filters)
+        await self._verify_account_binding(mutation=True)
         record, created = self.store.create_or_get(request)
         if not created and record.state is not OrderState.INTENDED:
             return record
@@ -814,6 +1026,7 @@ class OrderLifecycle:
         return self._apply_or_mark_unknown(request.intent_id, update)
 
     async def reconcile(self, intent_id: str) -> OrderRecord:
+        await self._verify_account_binding()
         record = self.store.get(intent_id)
         self._reject_oco(record.request)
         try:
@@ -824,6 +1037,7 @@ class OrderLifecycle:
         return self._apply_or_mark_unknown(intent_id, update)
 
     async def cancel(self, intent_id: str) -> OrderRecord:
+        await self._verify_account_binding(mutation=True)
         self._reject_oco(self.store.get(intent_id).request)
         record, claimed = self.store.mark_cancel_requested(intent_id)
         if not claimed:

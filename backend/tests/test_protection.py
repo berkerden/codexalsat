@@ -8,6 +8,7 @@ import pytest
 from backend.tests.test_testnet import NOW, credentials, response_for_basics
 
 from spotlab.orders import (
+    TESTNET_ACCOUNT_VENUE,
     ConfirmedFill,
     ExchangeUpdate,
     InsufficientInventory,
@@ -24,6 +25,7 @@ from spotlab.testnet import BinanceTestnetTransport
 
 def funded_store(path: Path) -> OrderStore:
     store = OrderStore("sqlite:///" + str(path))
+    store.bind_account(TESTNET_ACCOUNT_VENUE, 12345)
     buy = OrderRequest("buy", "buy-client", "BTCUSDT", "BUY", D("1"), D("100"), "USDT", "scope")
     store.create_or_get(buy)
     store.apply_update(
