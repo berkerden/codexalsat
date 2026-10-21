@@ -219,3 +219,11 @@ Bağımsız hedefli paket 249 başarılı; yerel PostgreSQL olmadığı için 13
 atlandı. Tam yerel paket 335 başarılı, 152 PostgreSQL varyantı atlandı; lint,
 strict tip kontrolü ve diff kontrolü geçti. PostgreSQL sonucu ilgili PR CI'ında
 kaydedilir. Bu inceleme üretim kullanım onayı değildir.
+
+
+Aynı PR'ın ilk CI koşusunda 487 backend testi geçti; bağımlılık taramaları
+Vite 8.3.0 ve certifi 2026.7.22 için güncel açık bildirdi. Vite 8.3.5'e,
+certifi 2026.10.19'a güncellendi. Ayrı Astra/high dar fark incelemesinde
+beklenmeyen bağımlılık, betik veya güvenlik ayarı değişikliği bulmadı.
+Yerel pip-audit ve npm audit temiz; 335 backend testi, 5 arayüz testi, 2 tarayıcı
+akışı ve arayüz lint/tip/build kontrolü güncel bağımlılıklarla geçti.

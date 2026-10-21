@@ -72,7 +72,10 @@ son incelemesi tamamlandı. Üç P2 bulgusu Sol/high ile düzeltildi: eksik komi
 varlığı alanı, kanonik olmayan emir kimliği ve borsa giriş zamanının yetki süresiyle
 karşılaştırılması. Hedefli bağımsız doğrulama 249 başarılı / 134 PostgreSQL varyantı
 atlandı; kapsam içinde açık P1/P2 yok. Son tam yerel paket 335 başarılı / 152 atlandı;
-lint ve strict tip kontrolü başarılı. PostgreSQL ve sürüm CI sonucu ilgili PR'dadır.
+lint ve strict tip kontrolü başarılı. İlk CI'da 487 backend testi geçti;
+güvenlik taramalarının işaretlediği Vite ve certifi sürümleri güncellendi. Güncel
+bağımlılıklarla yerel güvenlik taramaları, 5 arayüz testi ve 2 tarayıcı akışı geçti.
+Son PostgreSQL ve sürüm CI sonucu ilgili PR'dadır.
 
 Gerçek tarayıcıda BTC/SOL, periyot değişimi, araştırma formu, sanal oturum başlatma/durdurma,
 canlı mod kilidi ve 390×844 mobil menü/durdurma çubuğu kontrol edildi. Deneme paper oturumu durduruldu, açık pozisyon yok.
