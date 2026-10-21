@@ -565,6 +565,159 @@ async def test_closed_buy_oco_cycle_pagination_and_restart(database_url, monkeyp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("commission", ["0", "0.01"])
+async def test_missing_commission_asset_blocks_without_mutation(
+    database_url, commission
+) -> None:
+    store, plan = closed_cycle(database_url)
+    venue = ClosedVenue(plan)
+    trade = venue.trades[44][0]
+    trade["commission"] = commission
+    del trade["commissionAsset"]
+    if commission == "0":
+        with store._writer() as conn:
+            conn.execute(
+                text(
+                    "UPDATE order_fills SET fee_asset='' "
+                    "WHERE exchange_trade_id='BTCUSDT:2'"
+                )
+            )
+    before = historical_rows(store)
+
+    async with LegacyTestnetReader(
+        credentials(), mock_transport=httpx.MockTransport(venue), clock_ms=lambda: NOW
+    ) as reader:
+        with pytest.raises(LegacyMigrationError, match="migration_evidence_mismatch"):
+            await migrate_legacy(store, reader, apply=True)
+
+    assert historical_rows(store) == before
+    with store.db.connect() as conn:
+        assert conn.execute(text("SELECT COUNT(*) FROM ledger_account_binding")).scalar_one() == 0
+        assert not inspect(conn).has_table("ledger_account_migrations")
+    store.db.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("commission_asset", [None, ""])
+async def test_explicit_empty_commission_asset_accepts_zero_fee(
+    database_url, commission_asset
+) -> None:
+    store, plan = closed_cycle(database_url)
+    venue = ClosedVenue(plan)
+    venue.trades[44][0]["commissionAsset"] = commission_asset
+    with store._writer() as conn:
+        conn.execute(
+            text(
+                "UPDATE order_fills SET fee_asset='' WHERE exchange_trade_id='BTCUSDT:2'"
+            )
+        )
+    before = historical_rows(store)
+
+    async with LegacyTestnetReader(
+        credentials(), mock_transport=httpx.MockTransport(venue), clock_ms=lambda: NOW
+    ) as reader:
+        result = await migrate_legacy(store, reader, apply=True)
+
+    assert result["status"] == "migrated"
+    store.require_account_binding(TESTNET_ACCOUNT_VENUE, UID)
+    assert historical_rows(store) == before
+    store.db.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("order_type", ["LIMIT", "OCO"])
+async def test_noncanonical_exchange_id_blocks_without_mutation(
+    database_url, order_type
+) -> None:
+    if order_type == "LIMIT":
+        store = legacy_store(database_url)
+        venue = Venue()
+        with store._writer() as conn:
+            conn.execute(
+                text(
+                    "UPDATE order_intents SET exchange_order_id='BTCUSDT:042' "
+                    "WHERE intent_id='legacy-entry'"
+                )
+            )
+        with store.db.connect() as conn:
+            before = tuple(conn.execute(text("SELECT * FROM order_intents")).one())
+    else:
+        store, plan = closed_cycle(database_url)
+        venue = ClosedVenue(plan)
+        with store._writer() as conn:
+            conn.execute(
+                text(
+                    "UPDATE order_intents SET exchange_order_id='oco:BTCUSDT:0100' "
+                    "WHERE order_type='OCO'"
+                )
+            )
+        before = historical_rows(store)
+
+    async with LegacyTestnetReader(
+        credentials(), mock_transport=httpx.MockTransport(venue), clock_ms=lambda: NOW
+    ) as reader:
+        with pytest.raises(LegacyMigrationError, match="migration_local_inconsistent"):
+            await migrate_legacy(store, reader, apply=True)
+
+    with store.db.connect() as conn:
+        assert conn.execute(text("SELECT COUNT(*) FROM ledger_account_binding")).scalar_one() == 0
+        assert not inspect(conn).has_table("ledger_account_migrations")
+        if order_type == "LIMIT":
+            assert tuple(conn.execute(text("SELECT * FROM order_intents")).one()) == before
+    if order_type == "OCO":
+        assert historical_rows(store) == before
+    store.db.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("offset_ms", "passes"), [(1_000, True), (1_001, False)])
+async def test_cycle_remote_entry_creation_respects_persisted_deadline(
+    database_url, offset_ms, passes
+) -> None:
+    store, plan = closed_cycle(database_url)
+    venue = ClosedVenue(plan)
+    remote_time = plan.entry_deadline_ms + offset_ms
+    for order in venue.orders.values():
+        order["time"] = remote_time
+        order["updateTime"] = remote_time
+    for trades in venue.trades.values():
+        for trade in trades:
+            trade["time"] = remote_time
+    venue.order_list["transactionTime"] = remote_time
+    with store._writer() as conn:
+        conn.execute(
+            text("UPDATE order_intents SET updated_at=:at"),
+            {"at": remote_time},
+        )
+        conn.execute(
+            text("UPDATE testnet_cycles SET updated_at=:at"),
+            {"at": remote_time},
+        )
+    before = historical_rows(store)
+
+    def late_server(request):
+        if request.url.path == "/api/v3/time":
+            return httpx.Response(200, json={"serverTime": remote_time})
+        return venue(request)
+
+    async with LegacyTestnetReader(
+        credentials(), mock_transport=httpx.MockTransport(late_server), clock_ms=lambda: remote_time
+    ) as reader:
+        if passes:
+            result = await migrate_legacy(store, reader)
+            assert result["status"] == "verified_preview"
+        else:
+            with pytest.raises(LegacyMigrationError, match="migration_evidence_mismatch"):
+                await migrate_legacy(store, reader, apply=True)
+
+    assert historical_rows(store) == before
+    with store.db.connect() as conn:
+        assert conn.execute(text("SELECT COUNT(*) FROM ledger_account_binding")).scalar_one() == 0
+        assert not inspect(conn).has_table("ledger_account_migrations")
+    store.db.dispose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "fault",
     [

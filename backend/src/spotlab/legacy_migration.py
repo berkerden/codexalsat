@@ -354,7 +354,12 @@ def _local_fill(row: RowMapping, request: OrderRequest) -> ConfirmedFill:
 
 def _validate_local(
     snapshot: _LocalSnapshot,
-) -> tuple[dict[str, OrderRequest], dict[str, tuple[ConfirmedFill, ...]], dict[str, RowMapping]]:
+) -> tuple[
+    dict[str, OrderRequest],
+    dict[str, tuple[ConfirmedFill, ...]],
+    dict[str, RowMapping],
+    dict[str, int],
+]:
     if snapshot.binding_count or snapshot.receipt_count:
         _fail("migration_not_required")
     if snapshot.incident_count or ("table", "ledger_account_migrations", True) in snapshot.marker:
@@ -441,6 +446,7 @@ def _validate_local(
     if {key for key, value in requests.items() if value.order_type == "OCO"} != set(protections):
         _fail("migration_local_inconsistent")
 
+    entry_deadlines: dict[str, int] = {}
     for row in snapshot.cycles:
         try:
             plan = CyclePlan.deserialize(row["plan"])
@@ -455,6 +461,9 @@ def _validate_local(
         entry = requests.get(plan.entry_id)
         if entry != plan.entry():
             _fail("migration_local_inconsistent")
+        if plan.entry_id in entry_deadlines:
+            _fail("migration_local_inconsistent")
+        entry_deadlines[plan.entry_id] = plan.entry_deadline_ms
         entry_row = order_rows[plan.entry_id]
         if _integer(entry_row["created_at"], allow_zero=False) > plan.entry_deadline_ms + 1_000:
             _fail("migration_local_inconsistent")
@@ -494,7 +503,7 @@ def _validate_local(
         inventory[key] = inventory.get(key, ZERO) + signed
     if any(value != ZERO for value in inventory.values()):
         _fail("migration_inventory_nonzero")
-    return requests, frozen_fills, protections
+    return requests, frozen_fills, protections, entry_deadlines
 
 
 def _parse_exchange_id(value: object, symbol: str, *, oco: bool) -> int:
@@ -504,7 +513,10 @@ def _parse_exchange_id(value: object, symbol: str, *, oco: bool) -> int:
     suffix = value[len(prefix) :]
     if not suffix.isascii() or not suffix.isdecimal():
         _fail("migration_local_inconsistent")
-    return int(suffix)
+    parsed = int(suffix)
+    if suffix != str(parsed):
+        _fail("migration_local_inconsistent")
+    return parsed
 
 
 def _remote_state(value: object) -> OrderState:
@@ -562,6 +574,8 @@ async def _remote_trades(
             quantity = _decimal(trade.get("qty"), positive=True)
             quote_quantity = _decimal(trade.get("quoteQty"), positive=True)
             commission = _decimal(trade.get("commission"))
+            if "commissionAsset" not in trade:
+                _fail("migration_evidence_mismatch")
             asset = trade.get("commissionAsset")
             base_asset = request.symbol[: -len(request.quote_asset)]
             fee_base = ZERO
@@ -623,6 +637,7 @@ async def _verify_limit(
     row: RowMapping,
     request: OrderRequest,
     fills: tuple[ConfirmedFill, ...],
+    entry_deadline_ms: int | None = None,
 ) -> object:
     order_id = _parse_exchange_id(row["exchange_order_id"], request.symbol, oco=False)
     remote = _mapping(
@@ -659,6 +674,11 @@ async def _verify_limit(
     ):
         _fail("migration_evidence_mismatch")
     created, updated = _order_times(remote, reader)
+    if (
+        entry_deadline_ms is not None
+        and created > entry_deadline_ms + MAX_LOCAL_CLOCK_DRIFT_MS
+    ):
+        _fail("migration_evidence_mismatch")
     _assert_local_time(row, created, updated)
     remote_fills = await _remote_trades(reader, uid, request, order_id, created, updated)
     if remote_state is OrderState.REJECTED and remote_fills:
@@ -793,7 +813,7 @@ async def verify_legacy_migration(
     reader.begin_verification()
     with store._writer() as conn:
         snapshot = _read_local_snapshot(conn)
-    requests, fills, protections = _validate_local(snapshot)
+    requests, fills, protections, entry_deadlines = _validate_local(snapshot)
     rows = {row["intent_id"]: row for row in snapshot.orders}
     uid = await reader.account_uid()
     remote_evidence: list[object] = []
@@ -802,7 +822,14 @@ async def verify_legacy_migration(
         request = requests[intent]
         row = rows[intent]
         if request.order_type == "LIMIT":
-            evidence = await _verify_limit(reader, uid, row, request, fills[intent])
+            evidence = await _verify_limit(
+                reader,
+                uid,
+                row,
+                request,
+                fills[intent],
+                entry_deadlines.get(intent),
+            )
         else:
             evidence = await _verify_oco(
                 reader, uid, row, request, fills[intent], protections[intent]

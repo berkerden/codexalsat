@@ -1,4 +1,4 @@
-# Durum — 2026-10-19
+# Durum — 2026-10-21
 
 Yerel kaynak gerçek `berkerden/codexalsat` clone'udur. Public depo kullanılır.
 PR #3 araştırma/paper sürümünü main’e taşıdı; issue #2 canlı öncesi kalan işleri izler.
@@ -60,19 +60,28 @@ PR #4 testnet temelini, PR #5 süreli alış→OCO çevrimini main’e taşıdı
   kapanınca iki portun da serbest kalması doğrulandı. Kurtarma testleri ve
   [operasyon](docs/OPERATIONS.md) belgesi mevcut. Docker bu makinede yok.
 
-Önceki ana sürüm PR #11 CI’da 372 backend testi (SQLite + PostgreSQL 16),
+Ana sürüm PR #12 CI’da 471 backend testi (SQLite + PostgreSQL 16),
 5 frontend birim testi, 2 tarayıcı akışı, lint/tip/build ve güvenlik kontrollerini geçti.
+Test edilen kaynak 63d49ba; main birleştirme kaydı 800876b, yerel clone ile eşit.
 19 Ekim eski defter geçişinin yerel kontrolü: 327 başarılı, PostgreSQL servisi olmadığı
 için 144 varyant atlandı; lint ve strict tip kontrolü başarılı. Yeni geçiş paketi
-50 başarılı / 49 PostgreSQL varyantı atlandı. CI sonucu ilgili PR'da kaydedilir.
+50 başarılı / 49 PostgreSQL varyantı atlandı. CI’da bu varyantların tamamı geçti.
 Astra/high ilk incelemesi ve Sol/high uygulaması kullanım sınırına ulaştı; kalan
-düzeltme ve testler ana oturumda tamamlandı. Bağımsız son inceleme tamamlanmadı.
+düzeltme ve testler ana oturumda tamamlandı. 20–21 Ekim’de bağımsız Astra/high
+son incelemesi tamamlandı. Üç P2 bulgusu Sol/high ile düzeltildi: eksik komisyon
+varlığı alanı, kanonik olmayan emir kimliği ve borsa giriş zamanının yetki süresiyle
+karşılaştırılması. Hedefli bağımsız doğrulama 249 başarılı / 134 PostgreSQL varyantı
+atlandı; kapsam içinde açık P1/P2 yok. Son tam yerel paket 335 başarılı / 152 atlandı;
+lint ve strict tip kontrolü başarılı. İlk CI'da 487 backend testi geçti;
+güvenlik taramalarının işaretlediği Vite ve certifi sürümleri güncellendi. Güncel
+bağımlılıklarla yerel güvenlik taramaları, 5 arayüz testi ve 2 tarayıcı akışı geçti.
+Son PostgreSQL ve sürüm CI sonucu ilgili PR'dadır.
 
 Gerçek tarayıcıda BTC/SOL, periyot değişimi, araştırma formu, sanal oturum başlatma/durdurma,
 canlı mod kilidi ve 390×844 mobil menü/durdurma çubuğu kontrol edildi. Deneme paper oturumu durduruldu, açık pozisyon yok.
 Bu kısa kontrol ileri gözlem süresi yerine geçmez.
 
-Canlı **kapalı**. Eksikler: geçiş paketinin bağımsız son incelemesi, anahtarlı testnet
+Canlı **kapalı**. Eksikler: anahtarlı testnet
 kısmi dolum/hata senaryoları, stratejiyle sürekli
 giriş ve kesintisiz koruma/izleme entegrasyonu, hesap çapında sahipsiz emir ve reset kurtarma, BNB komisyon muhasebesi, pozisyon içi portföy maksimum düşüşü, 30 takvim günü ileri paper,
 yeterli ekonomik avantaj, üretim operasyon değerlendirmesi. PostgreSQL mantıksal

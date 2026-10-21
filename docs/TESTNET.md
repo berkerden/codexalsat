@@ -159,7 +159,10 @@ orders with complete fills, structurally consistent closed cycles, and exactly z
 inventory per scope and symbol. Each ordinary order is matched to its authenticated exchange
 identity and terms. OCO verification checks the parent, both derived child identities and terminal
 states, prices and quantities. Complete authenticated trade sets must match local trade IDs,
-amounts and commissions exactly; a matching aggregate alone is insufficient. Missing history,
+amounts and commissions exactly; a matching aggregate alone is insufficient. The commission-asset
+field must be present even for a zero fee; explicit null/empty is accepted only for zero. Persisted
+LIMIT/OCO exchange IDs must use their canonical numeric spelling. A cycle entry's exchange creation
+time must not exceed its stored entry deadline plus the existing 1000 ms clock tolerance. Missing history,
 unresolved submissions, unmatched protection payloads, residual dust or inconsistent evidence block
 the migration. Account-wide open orders are checked for known or suspicious bot identities;
 unrelated orders remain untouched.

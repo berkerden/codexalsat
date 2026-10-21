@@ -188,3 +188,42 @@ paketi 327 başarılı, 144 atlandı; lint ve strict tip kontrolü geçti. Anaht
 önizleme ve uygulama geçti, yedek alındı, tarihsel satırlar değişmedi; ardından
 normal başlangıç denetimi de geçti. Bu kapsam üretim izni, reset kurtarması veya
 strateji kârlılığı kanıtı değildir.
+
+
+## Eski defter geçişinin bağımsız son incelemesi — 20–21 Ekim 2026
+
+Astra/high, PR #12'nin kaynak ve testlerini ayrı bağlamda yeniden inceledi;
+önceki başarı özeti yerine sahte HTTP yanıtlarıyla üç P2 bulgusunu yeniden üretti.
+Sol/high aşağıdaki düzeltmeleri ve regresyon testlerini ekledi:
+
+- Eksik `commissionAsset` alanı, açık `null` veya boş değerli sıfır komisyonla
+  karışabiliyordu. Alanın varlığı zorunlu; eksik alan bağlamayı engeller. Açık
+  `null`/boş değer yalnız sıfır ücrette desteklenir.
+- Ön sıfırlı borsa kimlikleri sayıya çevrilerek kabul ediliyor, yerel kimlik
+  değişmediği için sonraki normal uzlaştırma çelişebiliyordu. LIMIT ve OCO
+  kimliklerinin kanonik biçimi zorunludur; tarihsel kimlikler düzeltilmez.
+- Yalnız yerel oluşturma zamanı çevrim süresiyle sınanıyordu. Borsanın alış
+  oluşturma zamanı da saklanmış giriş son tarihi + mevcut 1000 ms toleransıyla
+  karşılaştırılır; izin süresi uzatılmaz. +1000/+1001 ms sınırları sınanır.
+
+Başarısız geçişlerde geçmiş satırların korunması, hesap bağlaması ve makbuz
+oluşmaması test edilir. Bu pakette borsaya istek veya emir gönderilmedi.
+Mevcut yerel defterin yalnız toplu kontrolü, dolumların tamamında boş olmayan
+komisyon varlığı bulunduğunu doğruladı; eksik alanın boş yerel değerle eşleştiği
+ilk bulgunun örneği bu kayıtlarda yoktur. Eski geçiş yeniden uygulanmadı.
+
+
+21 Ekim’de ayrı Astra/high bağlamı üç düzeltmeyi ve ilgili normal LIMIT/OCO
+uzlaştırma entegrasyonunu yeniden doğruladı. İncelenen kapsamda açık P1/P2 yok.
+Bağımsız hedefli paket 249 başarılı; yerel PostgreSQL olmadığı için 134 varyant
+atlandı. Tam yerel paket 335 başarılı, 152 PostgreSQL varyantı atlandı; lint,
+strict tip kontrolü ve diff kontrolü geçti. PostgreSQL sonucu ilgili PR CI'ında
+kaydedilir. Bu inceleme üretim kullanım onayı değildir.
+
+
+Aynı PR'ın ilk CI koşusunda 487 backend testi geçti; bağımlılık taramaları
+Vite 8.3.0 ve certifi 2026.7.22 için güncel açık bildirdi. Vite 8.3.5'e,
+certifi 2026.10.19'a güncellendi. Ayrı Astra/high dar fark incelemesinde
+beklenmeyen bağımlılık, betik veya güvenlik ayarı değişikliği bulmadı.
+Yerel pip-audit ve npm audit temiz; 335 backend testi, 5 arayüz testi, 2 tarayıcı
+akışı ve arayüz lint/tip/build kontrolü güncel bağımlılıklarla geçti.
