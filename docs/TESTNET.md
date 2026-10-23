@@ -297,6 +297,53 @@ a background service. Computer sleep, shutdown or an unavailable venue can leave
 resumption. A leftover dust position is explicitly reported and blocks a new cycle; no automatic
 dust disposal or ledger reset is provided.
 
+## Foreground watcher for an existing cycle
+
+`watch` supervises one already persisted cycle. It never calls `start`, creates a BUY,
+chooses a strategy or renews the stored entry deadline. Keep the terminal and computer awake;
+this command does not install a background service or restart itself after the process exits.
+
+```bash
+# Observe an existing cycle for 60 seconds; no exchange mutations:
+.venv/bin/python -m spotlab.cycle_cli watch --cycle UNIQUE_ID --symbol BTCUSDT --run-seconds 60
+# Manage the existing entry/protection until closure, interruption or an attention condition:
+.venv/bin/python -m spotlab.cycle_cli watch --cycle UNIQUE_ID --symbol BTCUSDT --confirm-testnet
+```
+
+Observation is the default. It can update local reconciliation records, but cannot send or cancel
+an exchange order or set the persistent entry-stop flag. Confirmed management requests the
+persistent entry stop after account verification, before further management. It may cancel the
+remaining entry and install the existing deterministic SELL OCO once confirmed fills and fees
+permit it. An accepted but unanswered submission remains query-only; no replacement IDs or
+automatic OCO resubmission are introduced.
+
+A healthy PROTECTED observation keeps the watcher running. Closed cycles end successfully;
+incomplete protection or a non-retryable blocker requires attention. Only explicitly classified
+transient transport/timeouts retry, using capped exponential backoff and a consecutive-failure
+limit. Successful observations reset the counter. The exact `account_identity_unavailable` reason
+also retries within that bound because account transport outages are normalized to this reason;
+every attempt must verify identity again before management. Identity mismatch, missing binding,
+history-loss incidents, invariant failures and arbitrary API errors require attention. Venue
+cooldown still applies.
+
+Polling defaults to 2 seconds (`--poll-seconds`, range 1–5). Consecutive failures default to 5
+(`--max-consecutive-failures`, range 1–100); retry delay doubles up to 30 seconds. `--run-seconds 0`
+means no process time limit, while a finite positive value stops further passes at that deadline.
+
+Health output distinguishes the running process from confirmed coverage. Errors suppress cached
+coverage claims; successful protection observations still expire. The final record reports that
+the manager has stopped and whether the existing cycle needs resumption. Interrupting the process
+does not perform extra network requests; restart uses the same database and cycle ID. Exchange-side
+OCO orders can remain active after the process exits, but local monitoring has ended.
+
+Cooperative cycle managers share an exclusive lock. File-backed SQLite uses an adjacent canonical
+`.manager.lock` file; PostgreSQL holds a dedicated session advisory lock. A second watcher or
+legacy cycle manager fails before exchange access. The lock has no timeout takeover; process/session
+exit releases it. Lock ownership is checked before every pass; detected loss stops the next pass.
+An in-flight pass may finish after a PostgreSQL session disconnect. Durable order/cancel claims
+remain the duplicate-prevention mechanism; this is not exchange fencing or high-availability
+failover. The lock does not cover manual orders, other Binance applications or arbitrary database writers.
+
 ## Remaining live blockers
 
 Authenticated Testnet partial-fill and adverse failure scenarios remain outstanding, including

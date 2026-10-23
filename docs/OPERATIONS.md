@@ -104,3 +104,19 @@ Aynı uygulama Docker/PostgreSQL ile ayrı, sürekli açık Linux makinede çal�
 senaryolarını test edin. Uzak erişimi authenticated HTTPS ters proxy üzerinden sağlayın;
 mevcut loopback geliştirme API'sini doğrudan internete açmayın. VPS seçimi ve ücret
 kullanıcı onayına bağlıdır. Bu görevde ücretli sunucu kurulmadı.
+
+
+## Mevcut Testnet çevrimini uzun süre izleme
+
+Terminalde proje klasörüne geçtikten sonra, mevcut çevrimin aynı kimliğiyle
+izleyiciyi başlatın. Varsayılan yalnız borsa gözlemidir; süreyi `--run-seconds 60`
+ile sınırlayabilirsiniz. `--confirm-testnet` mevcut girişin durdurulmasını ve
+aynı çevrimin çıkış/koruma yönetimini etkinleştirir; yeni alış oluşturmaz.
+[Komutlar ve hata koşulları](TESTNET.md#foreground-watcher-for-an-existing-cycle).
+
+Terminali kapatmak veya bilgisayarı uyutmak izlemeyi keser. Ctrl+C sonrasında
+aynı kimlik ve veritabanıyla yeniden başlatın. `attention` sonucu, açıkta kalan
+miktar veya doğrulanamayan koruma incelenmeden yeni işlem başlatmayın. İzleyici
+başka yöneticinin kilidini zorla kaldırmaz; kilit dosyasını silmeyin. PostgreSQL
+bağlantısının kaybında süreç eski kilidi yeniden kazandığını varsaymaz.
+Bu komut sunucu servisi, panelden etkinleştirme veya gerçek para izni değildir.
