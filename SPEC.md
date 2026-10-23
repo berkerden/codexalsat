@@ -82,6 +82,11 @@ penceresi karar zamanından önce bitmeli; örnekler örtüşmemeli. Benzerlik o
     iptal veya sıfır envanter olarak yorumlanmaz. Özgün kayıtlar korunur; belirsizliği
     gidermek için defteri silmek, yeni kimlik vermek veya korumayı tekrar göndermek yoktur.
 
+13. Mevcut çevrim izleyicisi yeni alış veya giriş yetkisi oluşturmaz. Aynı defteri
+    kullanan çevrim yöneticileri özel kilitle sıralanır. Hata/eski gözlem koruma
+    kanıtı değildir; yeniden deneme yalnız açıkça tanımlanmış geçici hatalarda ve
+    aynı emir kimliklerinin sorgusuyla mevcut yaşam döngüsünü izler.
+
 ## Aşama kabulü ve operasyon
 
 A0: gerçek GitHub deposu, ilk push, CI, secret taraması. Repo/merge seçimi bekleniyor.

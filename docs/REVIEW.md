@@ -227,3 +227,25 @@ certifi 2026.10.19'a güncellendi. Ayrı Astra/high dar fark incelemesinde
 beklenmeyen bağımlılık, betik veya güvenlik ayarı değişikliği bulmadı.
 Yerel pip-audit ve npm audit temiz; 335 backend testi, 5 arayüz testi, 2 tarayıcı
 akışı ve arayüz lint/tip/build kontrolü güncel bağımlılıklarla geçti.
+
+
+## Mevcut çevrim izleyicisi — 23 Ekim 2026
+
+Astra/high tasarımı ve ilk kaynak incelemesini, Sol/high ilk uygulamayı yaptı.
+Uygulama oturumunun kullanım sınırından sonra ana oturum kalan hata düzeltmelerini
+ve testleri tamamladı. İlk inceleme sonrasında hata yakalandığında eski PROTECTED
+bilgisinin sağlıklı sayılması engellendi; okunamayan durum sıfır miktar yerine
+bilinmiyor olarak gösterilir. Geçici hata sürerken süre dolması başarılı kapanış
+sayılmaz. PostgreSQL kilidinin edinilme yanıtı belirsizse bağlantı havuza dönmeden
+geçersizleştirilir; oturum kilidi açık kalmaz. Onaysız veya kilidi alamayan eski
+yönetici komutunun hata yolundan kalıcı giriş durdurma yazması engellendi.
+
+Testler salt okunur izlemeyi, kısmi dolum/iptal sonrası korumayı, kabul edilmiş OCO
+yanıtı kaybolduktan sonra aynı niyetle yeniden başlatmayı, kilit çekişmesi/kaybını,
+gerilemeli yeniden sorgulama sınırını, kesintide ek ağ isteği yapılmamasını ve
+eski koruma bilgisinin başarısız kontrolde taze gösterilmemesini kapsar.
+Gerçek Binance isteği veya emir gönderilmedi. Ayrı Astra/high son incelemesi
+gerçek kaynak ve testleri inceledi, hedefli paketi bağımsız çalıştırdı: bu kapsamda
+açık P1/P2 yok. Tam yerel paket 367 başarılı, PostgreSQL servisi olmadığı için
+158 varyant atlandı; lint ve strict tip kontrolü geçti. PostgreSQL CI kanıtı
+ilgili PR'da kaydedilir. Üretim kapalıdır.

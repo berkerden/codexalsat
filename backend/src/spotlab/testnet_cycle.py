@@ -6,15 +6,18 @@ second entry. A restarted manager handles existing exposure only.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 
 from sqlalchemy import text
 
+from spotlab.manager_lock import ManagerBusy, ManagerLock
 from spotlab.orders import (
     AUDIT_REJECTION_REASONS,
     TERMINAL_STATES,
@@ -184,6 +187,11 @@ class TestnetCycle:
         self.store = self.orders.store
         self.protection = ProtectionLifecycle(self.store, transport)
         self.clock_ms = clock_ms or (lambda: time.time_ns() // 1_000_000)
+        self._manager_owner: object | None = None
+        self._manager_depth = 0
+        self._manager_lock: ManagerLock | None = None
+        self._manager_verified = False
+        self._last_verified_owner: object | None = None
         with self.store._writer() as conn:
             conn.execute(
                 text(
@@ -196,10 +204,52 @@ class TestnetCycle:
                 )
             )
 
+    @contextmanager
+    def exclusive_management(self) -> Iterator[ManagerLock]:
+        """Serialize cooperative managers for this database for the context lifetime."""
+        owner = asyncio.current_task()
+        if owner is None:
+            raise RuntimeError("cycle management requires an asyncio task")
+        if self._manager_owner is owner:
+            assert self._manager_lock is not None
+            self._manager_depth += 1
+            try:
+                yield self._manager_lock
+            finally:
+                self._manager_depth -= 1
+            return
+        if self._manager_owner is not None:
+            raise ManagerBusy("manager_busy")
+        manager_lock = ManagerLock(self.store.db)
+        with manager_lock:
+            self._manager_owner = owner
+            self._manager_depth = 1
+            self._manager_lock = manager_lock
+            self._manager_verified = False
+            self._last_verified_owner = None
+            try:
+                yield manager_lock
+            finally:
+                if self._manager_verified:
+                    self._last_verified_owner = owner
+                self._manager_lock = None
+                self._manager_depth = 0
+                self._manager_owner = None
+
+    def management_was_verified(self) -> bool:
+        """Return whether this task's most recent acquired management passed binding."""
+        owner = asyncio.current_task()
+        return owner is not None and (
+            (self._manager_owner is owner and self._manager_verified)
+            or self._last_verified_owner is owner
+        )
+
     async def _verify_account_binding(self) -> None:
         verify = getattr(self.transport, "verify_account_binding", None)
         if verify is not None:
             await verify()
+        if self._manager_owner is asyncio.current_task():
+            self._manager_verified = True
 
     def _plan(self, cycle_id: str) -> CyclePlan:
         with self.store.db.connect() as conn:
@@ -351,6 +401,10 @@ class TestnetCycle:
         return result
 
     async def start(self, plan: CyclePlan) -> dict[str, object]:
+        with self.exclusive_management():
+            return await self._start(plan)
+
+    async def _start(self, plan: CyclePlan) -> dict[str, object]:
         """Explicit new entry only. Caller must obtain Testnet confirmation first."""
         plan.validate()
         if plan.symbol != self.transport.symbol:
@@ -448,6 +502,14 @@ class TestnetCycle:
         return await self.advance(plan.cycle_id, allow_mutations=True)
 
     async def advance(
+        self, cycle_id: str, *, allow_mutations: bool = False, stop_entry: bool = False
+    ) -> dict[str, object]:
+        with self.exclusive_management():
+            return await self._advance(
+                cycle_id, allow_mutations=allow_mutations, stop_entry=stop_entry
+            )
+
+    async def _advance(
         self, cycle_id: str, *, allow_mutations: bool = False, stop_entry: bool = False
     ) -> dict[str, object]:
         """Reconcile existing intents; optional management never creates a BUY."""

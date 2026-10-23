@@ -1,4 +1,4 @@
-# Durum — 2026-10-21
+# Durum — 2026-10-23
 
 Yerel kaynak gerçek `berkerden/codexalsat` clone'udur. Public depo kullanılır.
 PR #3 araştırma/paper sürümünü main’e taşıdı; issue #2 canlı öncesi kalan işleri izler.
@@ -60,9 +60,9 @@ PR #4 testnet temelini, PR #5 süreli alış→OCO çevrimini main’e taşıdı
   kapanınca iki portun da serbest kalması doğrulandı. Kurtarma testleri ve
   [operasyon](docs/OPERATIONS.md) belgesi mevcut. Docker bu makinede yok.
 
-Ana sürüm PR #12 CI’da 471 backend testi (SQLite + PostgreSQL 16),
+Önceki ana sürüm PR #13 CI’da 487 backend testi (SQLite + PostgreSQL 16),
 5 frontend birim testi, 2 tarayıcı akışı, lint/tip/build ve güvenlik kontrollerini geçti.
-Test edilen kaynak 63d49ba; main birleştirme kaydı 800876b, yerel clone ile eşit.
+Test edilen kaynak dfc7c23; main birleştirme kaydı 1281e38.
 19 Ekim eski defter geçişinin yerel kontrolü: 327 başarılı, PostgreSQL servisi olmadığı
 için 144 varyant atlandı; lint ve strict tip kontrolü başarılı. Yeni geçiş paketi
 50 başarılı / 49 PostgreSQL varyantı atlandı. CI’da bu varyantların tamamı geçti.
@@ -83,7 +83,7 @@ Bu kısa kontrol ileri gözlem süresi yerine geçmez.
 
 Canlı **kapalı**. Eksikler: anahtarlı testnet
 kısmi dolum/hata senaryoları, stratejiyle sürekli
-giriş ve kesintisiz koruma/izleme entegrasyonu, hesap çapında sahipsiz emir ve reset kurtarma, BNB komisyon muhasebesi, pozisyon içi portföy maksimum düşüşü, 30 takvim günü ileri paper,
+giriş ve gözetimsiz servis/arayüz entegrasyonu, hesap çapında sahipsiz emir ve reset kurtarma, BNB komisyon muhasebesi, pozisyon içi portföy maksimum düşüşü, 30 takvim günü ileri paper,
 yeterli ekonomik avantaj, üretim operasyon değerlendirmesi. PostgreSQL mantıksal
 kurtarma ve eşzamanlılık CI'da sınanır; fiziksel pg_dump/restore ve Docker testi
 ayrıca gerekir. Kullanıcı canlı para işlemi yetkisi vermedi; yalnız sanal Testnet
@@ -96,3 +96,22 @@ CI başarılı PR birleştirme yetkisi kullanıcı tarafından verildi.
 Model devirleri: Terra medium iskelet; Sol high veri, finans/araştırma ve emir/secret
 çekirdeği; Sol medium arayüz; ayrı Astra high inceleme. Kullanım sınırları çalışmayı
 kesintiye uğrattı. Sayısal token/maliyet ölçümü yok; tasarruf yüzdesi iddiası yok.
+
+
+23 Ekim — mevcut çevrim için ön planda izleyici
+
+`cycle_cli watch` mevcut tek çevrimi izler; yeni alış açmaz ve giriş süresini
+uzatmaz. Varsayılanı salt okunurdur. Açık Testnet seçimi hesap doğrulamasından
+sonra girişi kalıcı durdurur, kalan alışın iptalini ve mevcut envanterin OCO
+korumasını yönetir. Belirsiz emir aynı kimlikle sorgulanır, yeniden gönderilmez.
+Geçici hatalarda sınırlı geri çekilme, hata sonrası eski koruma bilgisini geçersiz
+sayma, süre dolumu/kesinti durumu ve tek yönetici kilidi eklendi. SQLite dosya
+kilidi ve PostgreSQL oturum kilidi işbirliği yapan yöneticileri ayırır; borsada
+fencing veya yüksek erişilebilirlik sağlamaz. Terminal ve bilgisayar açık kalmalıdır.
+
+Sahte HTTP ile gerçek taşıma katmanında salt okunur izleme, kısmi dolum/iptal,
+OCO kabul yanıtı kaybından sonra yeniden başlatma ve ikinci yöneticiyi reddetme
+sınanır. Gerçek hesap/anahtar kullanılmadı. PostgreSQL oturum kaybı ve kilit
+bırakma testleri CI'da çalışır. Bağımsız Astra/high son incelemesinde kapsam içinde
+açık P1/P2 yok. Yerel paket 367 başarılı / 158 PostgreSQL varyantı atlandı; lint
+ve strict tip kontrolü geçti. CI sonucu PR'da izlenir.
