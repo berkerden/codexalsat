@@ -115,3 +115,11 @@ sınanır. Gerçek hesap/anahtar kullanılmadı. PostgreSQL oturum kaybı ve kil
 bırakma testleri CI'da çalışır. Bağımsız Astra/high son incelemesinde kapsam içinde
 açık P1/P2 yok. Yerel paket 367 başarılı / 158 PostgreSQL varyantı atlandı; lint
 ve strict tip kontrolü geçti. CI sonucu PR'da izlenir.
+
+
+İlk izleyici CI koşusunda 525 backend testi (SQLite + PostgreSQL 16),
+5 arayüz testi ve 2 tarayıcı akışı geçti. Ön yüz taramasının yüksek önem eşiği
+CI'ı geçirse de günlükler Vitest mocker için iki orta düzey açık bildirdi
+(GHSA-qxg6-89mg-rqv8, GHSA-xp26-3454-mjgp). Vitest 5.0.5'e sabitlendi;
+yerel npm audit sıfır açık, lint/tip/build, 5 arayüz testi ve 2 tarayıcı akışı
+başarılı. Son commitin CI sonucu ilgili PR'da kaydedilir.
