@@ -1,4 +1,4 @@
-# Durum — 2026-10-23
+# Durum — 2026-10-26
 
 Yerel kaynak gerçek `berkerden/codexalsat` clone'udur. Public depo kullanılır.
 PR #3 araştırma/paper sürümünü main’e taşıdı; issue #2 canlı öncesi kalan işleri izler.
@@ -83,7 +83,7 @@ Bu kısa kontrol ileri gözlem süresi yerine geçmez.
 
 Canlı **kapalı**. Eksikler: anahtarlı testnet
 kısmi dolum/hata senaryoları, stratejiyle sürekli
-giriş ve gözetimsiz servis/arayüz entegrasyonu, hesap çapında sahipsiz emir ve reset kurtarma, BNB komisyon muhasebesi, pozisyon içi portföy maksimum düşüşü, 30 takvim günü ileri paper,
+giriş ve gözetimsiz işletim sistemi servisi, hesap çapında sahipsiz emir ve reset kurtarma, BNB komisyon muhasebesi, pozisyon içi portföy maksimum düşüşü, 30 takvim günü ileri paper,
 yeterli ekonomik avantaj, üretim operasyon değerlendirmesi. PostgreSQL mantıksal
 kurtarma ve eşzamanlılık CI'da sınanır; fiziksel pg_dump/restore ve Docker testi
 ayrıca gerekir. Kullanıcı canlı para işlemi yetkisi vermedi; yalnız sanal Testnet
@@ -123,3 +123,27 @@ CI'ı geçirse de günlükler Vitest mocker için iki orta düzey açık bildird
 (GHSA-qxg6-89mg-rqv8, GHSA-xp26-3454-mjgp). Vitest 5.0.5'e sabitlendi;
 yerel npm audit sıfır açık, lint/tip/build, 5 arayüz testi ve 2 tarayıcı akışı
 başarılı. Son commitin CI sonucu ilgili PR'da kaydedilir.
+
+
+26 Ekim — panelden mevcut Testnet çevrimi yönetimi
+
+PR #14 main'e birleştirildi (35ea54b); test edilen eae4946 için CI'da
+525 backend, 5 arayüz ve 2 tarayıcı testi ile iki bağımlılık taraması geçti.
+
+Operasyon panelinde mevcut açık çevrimi seçme, varsayılan salt okunur izleme,
+ayrı onayla kalan alış iptali/mevcut envanter koruması ve izleyiciyi durdurma
+eklendi. Görev uygulama sunucusuna aittir; tarayıcı kapanınca devam eder,
+sunucu kapanınca temizlenir ve yeniden başlangıçta boşta kalır. Yeni alış
+açılmaz; durdur düğmesi pozisyonu kapatmaz veya emir iptal etmez.
+
+Kontrol istekleri sabit yerel Origin, JSON ve süreç içi oturum anahtarı ister.
+Durum sorgusu defteri değiştirmez; eksik defter oluşturmaz. Anahtar ve defter
+yollarını tarayıcı seçemez. Tek görev ve mevcut yönetici kilidi korunur.
+Gecikmiş durum yanıtı durdurma sonucunu geri alamaz; eski koruma gözlemi
+korumalı veya sıfır korumasız miktar olarak sunulmaz.
+
+Yerel paket 381 başarılı / 161 PostgreSQL varyantı atlandı; 17 arayüz testi,
+390px mobil başlatma/durdurma dahil 3 tarayıcı akışı, lint/tip/build geçti.
+Astra/high bağımsız incelemesinde iki P2 giderilip tekrar doğrulandı; açık
+P1/P2 yok. Gerçek anahtar veya borsa isteği kullanılmadı. PostgreSQL ve son
+bağımlılık sürümlerinin CI kanıtı ilgili PR'da kaydedilir. Üretim kapalıdır.

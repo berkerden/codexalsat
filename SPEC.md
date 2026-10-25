@@ -33,6 +33,13 @@ Para ve emir miktarlarında float yok. Gözlem/durum/işlem kayıtları Git dı�
 - `POST /api/paper/stop`: girişleri durdurma; açık pozisyon yönetimi sürer.
 - `POST /api/paper/close`: yalnız paper bot pozisyonlarını kapatma.
 - `POST /api/live/activate`: değerlendirme engelleri bitmeden reddedilir.
+- `GET /api/testnet/status`: yalnız yerel çevrim kayıtları ve bu backend'in izleyicisi;
+  hesap sorgusu, anahtar okuma veya defter/şema oluşturma yapmaz.
+- `GET /api/testnet/session`: yalnız süreç belleğinde tutulan kontrol belirteci.
+- `POST /api/testnet/watch/start`: mevcut çevrimde varsayılan salt okunur izleme;
+  açık Testnet seçimi kalan girişin iptalini ve mevcut koruma yönetimini açar.
+- `POST /api/testnet/watch/{run_id}/stop`: yalnız eşleşen izleyici görevini durdurur;
+  borsa emirlerini iptal etmez, pozisyon kapatmaz.
 
 ## Araştırma protokolü (sonuçlar görülmeden)
 
@@ -86,6 +93,11 @@ penceresi karar zamanından önce bitmeli; örnekler örtüşmemeli. Benzerlik o
     kullanan çevrim yöneticileri özel kilitle sıralanır. Hata/eski gözlem koruma
     kanıtı değildir; yeniden deneme yalnız açıkça tanımlanmış geçici hatalarda ve
     aynı emir kimliklerinin sorgusuyla mevcut yaşam döngüsünü izler.
+14. Panel açılması, yeniden bağlanması veya backend yeniden başlaması Testnet
+    izleyicisini başlatmaz. Kontroller geçerli yerel kaynak ve süreç oturum belirteci
+    ister; tarayıcıdan dosya yolu, anahtar, sembol veya yeni emir şartı alınmaz.
+    Tek görev backend'e aittir; tarayıcı kapanması onu durdurmaz. Backend kapanması
+    görevi bitirir. Eski, başarısız veya durdurulmuş gözlem koruma kanıtı değildir.
 
 ## Aşama kabulü ve operasyon
 

@@ -60,6 +60,7 @@ describe('SpotLab dashboard', () => {
       const path = String(input)
       if (path === '/api/status') return json(status)
       if (path === '/api/paper') return json(paper)
+      if (path === '/api/testnet/status') return json({ mode: 'testnet', production_enabled: false, server_instance_id: 'test-server', observed_at_ms: Date.now(), ledger_status: 'ready', cycles: [], watcher: { run_id: null, cycle_id: null, symbol: null, allow_mutations: false, phase: 'idle', health: 'idle', manager_running: false, coverage_observation_fresh: false, snapshot: null } })
       if (path.startsWith('/api/symbols')) return json({ symbols: ['BTCUSDT', 'SOLUSDT'] })
       if (path.startsWith('/api/market')) {
         const requestedSymbol = path.includes('symbol=SOLUSDT') ? 'SOLUSDT' : 'BTCUSDT'
@@ -133,6 +134,7 @@ describe('SpotLab dashboard', () => {
       const path = String(input)
       if (path === '/api/status') return json(status)
       if (path === '/api/paper') return json({ ...paper, config: { symbol: 'BTCUSDT', interval: '15m', strategy: 'pullback' } })
+      if (path === '/api/testnet/status') return json({ mode: 'testnet', production_enabled: false, server_instance_id: 'test-server', observed_at_ms: Date.now(), ledger_status: 'ready', cycles: [], watcher: { run_id: null, cycle_id: null, symbol: null, allow_mutations: false, phase: 'idle', health: 'idle', manager_running: false, coverage_observation_fresh: false, snapshot: null } })
       if (path.startsWith('/api/symbols')) return json({ symbols: ['BTCUSDT', 'SOLUSDT'] })
       if (path.startsWith('/api/market')) return json(market)
       return json({ detail: 'Testte tanımsız istek' }, 404)

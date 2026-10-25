@@ -3,6 +3,7 @@ import { api, errorMessage } from './api'
 import { CandleChart } from './components/CandleChart'
 import { JsonDetails } from './components/JsonDetails'
 import { SignalCard } from './components/SignalCard'
+import { TestnetPanel } from './components/TestnetPanel'
 import { decimal, money, time } from './format'
 import type {
   MarketResponse,
@@ -489,6 +490,7 @@ function Operations({ status, paper, error }: { status: StatusResponse | null; p
   const blockers = status?.blockers ?? []
   return (
     <div className="operations-grid">
+      <TestnetPanel />
       <section className="panel live-lock">
         <span className="lock-illustration" aria-hidden="true">⌾</span>
         <span className="eyebrow">Gerçek emir yetkisi</span>

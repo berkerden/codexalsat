@@ -120,3 +120,36 @@ miktar veya doğrulanamayan koruma incelenmeden yeni işlem başlatmayın. İzle
 başka yöneticinin kilidini zorla kaldırmaz; kilit dosyasını silmeyin. PostgreSQL
 bağlantısının kaybında süreç eski kilidi yeniden kazandığını varsaymaz.
 Bu komut sunucu servisi, panelden etkinleştirme veya gerçek para izni değildir.
+
+
+## Panelden Testnet izleme
+
+Operasyon bölümündeki Testnet alanı, seçilmiş yerel defterin mevcut çevrimlerini
+gösterir. Bu liste son yerel kayıttır; borsadaki güncel koruma kanıtı değildir.
+Paneli açmak veya yenilemek borsa sorgusu ya da izleyici başlatmaz.
+
+1. Açık mevcut çevrimi seçip **Yalnız izle** ile salt okunur izlemeyi başlatın.
+2. Kalan alışın iptali ve mevcut envanterin korumasını yönetmek için paneldeki
+   Testnet onayını seçin, ardından **Korumayı yönet** kullanın. Bu seçim kalıcı
+   giriş durdurma ister; yeni alış ya da yenilenmiş giriş süresi oluşturmaz.
+3. **İzleyiciyi durdur** yalnız arka plandaki izleme görevini keser. Emir iptali
+   veya pozisyon kapatma değildir. Borsada kurulmuş emirlerin durumunu ayrıca
+   doğrulayın; izleme durduğunda panel korumayı güncel olarak göstermez.
+
+Tek izleyici bu backend sürecine aittir. Tarayıcı sekmesini kapatmak görevi kesmez;
+`run-local.sh` ile açılan sunucuları kapatmak keser. Bu paket macOS açılış servisi
+veya bilgisayar uykusunda çalışan bir servis kurmaz. Backend yeniden başladığında
+izleyici kapalıdır; aynı çevrim için kullanıcı yeniden seçim yapar. Eski tarayıcı
+oturumunun kontrol belirteci geçersiz olur; başarısız komut otomatik tekrarlanmaz.
+
+Yalnız tek Uvicorn worker kullanın. CLI izleyicisi çalışıyorsa panel yöneticisi
+mevcut kilidi zorlamaz. Panelde bu backend'in boşta olması, başka bir CLI
+yöneticisinin bulunmadığı anlamına gelmez. Yerel API'yi internete açmayın;
+oturum belirteci ve kaynak kontrolü uzak çok kullanıcılı kimlik doğrulaması değildir.
+
+Varsayılan Testnet defteri ve anahtar dosyası `SPOTLAB_DATA_DIR` altındadır
+(`testnet-orders.sqlite`, `testnet-credentials.json`). Özel veritabanı yalnız
+sunucu yapılandırmasındaki `SPOTLAB_TESTNET_DATABASE_URL` ile seçilir.
+Tarayıcıdan dosya yolu, API anahtarı veya yeni emir koşulu gönderilmez.
+Defter yoksa panel boş görünür; izleyiciyi çalıştırmak için defter silmeyin veya
+yeni boş defter oluşturarak hesap/geçmiş engellerini aşmaya çalışmayın.

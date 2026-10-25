@@ -5,6 +5,8 @@ import type {
   ResearchReport,
   ResearchRequest,
   StatusResponse,
+  TestnetSessionResponse,
+  TestnetStatusResponse,
   Venue,
 } from './types'
 
@@ -78,6 +80,22 @@ export const api = {
     request<PaperState>('/api/paper/start', { method: 'POST', body: JSON.stringify(config) }),
   paperStop: () => request<PaperState>('/api/paper/stop', { method: 'POST', body: '{}' }),
   paperClose: () => request<PaperState>('/api/paper/close', { method: 'POST', body: '{}' }),
+  testnetStatus: (signal?: AbortSignal) => request<TestnetStatusResponse>('/api/testnet/status', { signal }),
+  testnetSession: (signal?: AbortSignal) => request<TestnetSessionResponse>('/api/testnet/session', { signal }),
+  testnetWatchStart: (cycleId: string, confirmTestnet: boolean, token: string, signal?: AbortSignal) =>
+    request<TestnetStatusResponse>('/api/testnet/watch/start', {
+      method: 'POST',
+      headers: { 'X-Spotlab-Control-Token': token },
+      body: JSON.stringify({ cycle_id: cycleId, confirm_testnet: confirmTestnet }),
+      signal,
+    }),
+  testnetWatchStop: (runId: string, token: string, signal?: AbortSignal) =>
+    request<TestnetStatusResponse>(`/api/testnet/watch/${encodeURIComponent(runId)}/stop`, {
+      method: 'POST',
+      headers: { 'X-Spotlab-Control-Token': token },
+      body: '{}',
+      signal,
+    }),
 }
 
 export function errorMessage(error: unknown): string {
