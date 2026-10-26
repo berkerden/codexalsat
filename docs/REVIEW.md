@@ -257,3 +257,41 @@ CI'ı geçirse de günlükler Vitest mocker için iki orta düzey açık bildird
 (GHSA-qxg6-89mg-rqv8, GHSA-xp26-3454-mjgp). Vitest 5.0.5'e sabitlendi;
 yerel npm audit sıfır açık, lint/tip/build, 5 arayüz testi ve 2 tarayıcı akışı
 başarılı. Son commitin CI sonucu ilgili PR'da kaydedilir.
+
+
+## Panelden mevcut çevrim yönetimi — 26 Ekim 2026
+
+Astra/high tasarım ve bağımsız kritik inceleme; Sol/high backend ve Sol/medium
+arayüz uygulaması. Backend uygulama oturumunun kullanım sınırından sonra ana
+oturum kalan düzeltmeleri, yaşam döngüsü testlerini ve bütünleştirmeyi tamamladı.
+
+Bağımsız incelemede iki P2 yeniden üretildi ve düzeltildi:
+- Durdur isteğinden önce başlayan geç durum yanıtı, yeni durdurulmuş görünümü
+  eski sağlıklı koruma görünümüyle değiştirebiliyordu. Kontrol isteği önceki
+  sorgu neslini geçersiz kılar; kontrol sürerken yeni sorgu başlatılmaz.
+- Süresi geçmiş koruma gözleminde başlık güncel değil dese de ayrıntıda Korumalı
+  ve sıfır korumasız miktar kalabiliyordu. Güncellik kaybolunca ayrıntı da
+  doğrulanmadı ve mevcut miktar kadar doğrulanmamış maruziyet olarak gösterilir.
+
+Astra/high iki düzeltmeyi ayrı regresyon testleriyle bağımsız doğruladı; kapsam
+içinde açık P1/P2 yok. Yetki sınırı, tek görev sahipliği, yeniden başlatmada
+boşta kalma, salt okunur durum sorgusu, sabit anahtar yolu ve yeni alış
+açılamaması incelendi. Eşzamanlı başlat/durdur, temizlik beklenirken ikinci
+durdurmanın temizliği kesmemesi, sunucu kapanışı, farklı Origin/oturum ve
+SQLite/PostgreSQL salt okunur defter testleri eklendi.
+
+Yerel backend 381 başarılı / 161 PostgreSQL varyantı atlandı; arayüz 17 test,
+3 tarayıcı akışı, lint/tip/build başarılı. Masaüstü paneli sentetik verilerle
+görsel incelendi; 390px mobil onay/başlat/durdur tarayıcı testi geçti.
+Gerçek anahtar/hesap veya Binance isteği kullanılmadı. Üretim kapalıdır.
+
+Güncel güvenlik taraması geliştirme bağımlılıklarında undici, zod ve filelock
+açıkları bildirdi. undici 8.12.3, zod 4.6.7 ve filelock 4.2.1'e dar kapsamlı
+güncelleme yapıldı. Ana bağımlılık aralıkları ve güvenlik ayarları değişmedi.
+Son sürüm CI ve tarama sonucu ilgili PR'da kaydedilir.
+
+Astra/high dar son fark incelemesi üç bağımlılık sürümü dışında paket, betik,
+CI veya güvenlik ayarı değişmediğini doğruladı. Saat güncellemesi ve Türkçe
+etiketler önceki iki düzeltmeyi koruyor; bağımsız regresyonlar tekrar geçti.
+Güncellenen bağımlılıklarla yerel tam backend, 17 arayüz, 3 tarayıcı testi ve
+npm audit / pip-audit taramaları geçti (bilinen açık yok).

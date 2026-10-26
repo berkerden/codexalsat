@@ -106,3 +106,62 @@ export interface ApiErrorBody {
   message?: string
   blockers?: string[]
 }
+
+export type TestnetSymbol = 'BTCUSDT' | 'SOLUSDT'
+export type TestnetWatcherPhase = 'idle' | 'starting' | 'running' | 'stopping' | 'stopped' | 'attention' | 'closed'
+export type TestnetWatcherHealth = 'idle' | 'starting' | 'healthy' | 'retrying' | 'stale' | 'stopping' | 'stopped' | 'attention' | 'closed'
+
+export interface TestnetCycleSummary {
+  cycle_id: string
+  symbol: TestnetSymbol
+  state: string
+  stop_entry_requested: boolean
+  updated_at_ms: number
+}
+
+export interface WatchSnapshot {
+  cycle_id?: string
+  mode?: string
+  production_enabled?: boolean
+  state?: string
+  reason?: string | null
+  stop_entry_requested?: boolean | null
+  entry_state?: string | null
+  protection_state?: string | null
+  owned_quantity?: string | null
+  dust_quantity?: string | null
+  unprotected_quantity?: string | null
+  checked_at_ms?: number | null
+  last_success_at_ms?: number | null
+  observed_at_ms?: number | null
+  coverage_observation_fresh?: boolean
+  consecutive_failures?: number
+  retry_in_seconds?: number
+  resume_required?: boolean
+  [key: string]: unknown
+}
+
+export interface TestnetStatusResponse {
+  mode: 'testnet'
+  production_enabled: false
+  server_instance_id: string
+  observed_at_ms: number
+  ledger_status: 'ready' | 'missing' | 'unavailable'
+  cycles: TestnetCycleSummary[]
+  watcher: {
+    run_id: string | null
+    cycle_id: string | null
+    symbol: TestnetSymbol | null
+    allow_mutations: boolean
+    phase: TestnetWatcherPhase
+    health: TestnetWatcherHealth
+    manager_running: boolean
+    coverage_observation_fresh: boolean
+    snapshot: WatchSnapshot | null
+  }
+}
+
+export interface TestnetSessionResponse {
+  server_instance_id: string
+  control_token: string
+}

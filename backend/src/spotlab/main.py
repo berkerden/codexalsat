@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
@@ -33,6 +33,7 @@ from spotlab.market import (
 )
 from spotlab.research import run_research, similar_patterns, strategy_signal
 from spotlab.signals import signal_card
+from spotlab.testnet_panel import PanelError, TestnetPanel, WatchStartInput, WatchStopInput
 
 D = Decimal
 LIVE_BLOCKERS = [
@@ -41,6 +42,14 @@ LIVE_BLOCKERS = [
     "Üretim verisiyle ileri paper gözlem süresi ve ekonomik avantaj onayı tamamlanmadı.",
     "Bağımsız canlı kullanım incelemesi tamamlanmadı; üretim emir adaptörü etkin değil.",
 ]
+TRUSTED_LOOPBACK_ORIGINS = frozenset(
+    {
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+    }
+)
 
 
 def version() -> str:
@@ -94,9 +103,13 @@ def create_app(database_url: str | None = None, *, run_worker: bool = True) -> F
     data_dir = Path(os.getenv("SPOTLAB_DATA_DIR", "data"))
     data_dir.mkdir(parents=True, exist_ok=True)
     db_url: str = database_url or os.getenv("DATABASE_URL") or f"sqlite:///{data_dir}/paper.sqlite"
-    allowed_origins = os.getenv(
-        "CORS_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173"
-    ).split(",")
+    testnet_db_url = os.getenv(
+        "SPOTLAB_TESTNET_DATABASE_URL", f"sqlite:///{data_dir}/testnet-orders.sqlite"
+    )
+    configured_origins = set(
+        os.getenv("CORS_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173").split(",")
+    )
+    allowed_origins = sorted(configured_origins | TRUSTED_LOOPBACK_ORIGINS)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -110,10 +123,14 @@ def create_app(database_url: str | None = None, *, run_worker: bool = True) -> F
         app.state.worker_error = None
         app.state.research_lock = asyncio.Lock()
         app.state.background_enabled = run_worker
+        app.state.testnet_panel = TestnetPanel(
+            testnet_db_url, data_dir / "testnet-credentials.json"
+        )
         worker = asyncio.create_task(paper_loop(app)) if run_worker else None
         try:
             yield
         finally:
+            await app.state.testnet_panel.shutdown()
             for task in (worker, app.state.stream_task):
                 if task:
                     task.cancel()
@@ -130,13 +147,40 @@ def create_app(database_url: str | None = None, *, run_worker: bool = True) -> F
         CORSMiddleware,
         allow_origins=allowed_origins,
         allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type"],
+        allow_headers=["Content-Type", "X-Spotlab-Control-Token"],
     )
 
     @app.middleware("http")
     async def local_origin(request: Request, call_next: Any) -> Any:
         origin = request.headers.get("origin")
-        if request.method == "POST" and origin and origin not in allowed_origins:
+        is_testnet_path = request.url.path.startswith("/api/testnet/")
+        if request.url.path in {"/api/testnet/session", "/api/testnet/status"}:
+            foreign_origin = origin is not None and origin not in TRUSTED_LOOPBACK_ORIGINS
+            cross_site = request.headers.get("sec-fetch-site", "").lower() == "cross-site"
+            if foreign_origin or cross_site:
+                return JSONResponse(status_code=403, content={"detail": {"code": "origin_denied"}})
+        if request.method == "OPTIONS" and is_testnet_path:
+            if origin not in TRUSTED_LOOPBACK_ORIGINS:
+                return JSONResponse(status_code=403, content={"detail": {"code": "origin_denied"}})
+        if request.method == "POST" and request.url.path.startswith("/api/testnet/watch/"):
+            if origin not in TRUSTED_LOOPBACK_ORIGINS:
+                return JSONResponse(
+                    status_code=403, content={"detail": {"code": "origin_required"}}
+                )
+            content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            if content_type != "application/json":
+                return JSONResponse(
+                    status_code=415, content={"detail": {"code": "json_content_type_required"}}
+                )
+            supplied = request.headers.get("x-spotlab-control-token")
+            if not app.state.testnet_panel.valid_token(supplied):
+                return JSONResponse(status_code=403, content={"detail": {"code": "invalid_token"}})
+        if (
+            request.method == "POST"
+            and not is_testnet_path
+            and origin
+            and origin not in configured_origins
+        ):
             return JSONResponse(status_code=403, content={"detail": "İzin verilmeyen kaynak"})
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
@@ -171,6 +215,28 @@ def create_app(database_url: str | None = None, *, run_worker: bool = True) -> F
                 "real_order_transport": False,
             },
         }
+
+    @app.get("/api/testnet/session")
+    async def testnet_session() -> dict[str, str]:
+        return cast(TestnetPanel, app.state.testnet_panel).session()
+
+    @app.get("/api/testnet/status")
+    async def testnet_status() -> dict[str, object]:
+        return await cast(TestnetPanel, app.state.testnet_panel).status()
+
+    @app.post("/api/testnet/watch/start", status_code=202)
+    async def testnet_watch_start(body: WatchStartInput) -> dict[str, object]:
+        try:
+            return await cast(TestnetPanel, app.state.testnet_panel).start(body)
+        except PanelError as error:
+            raise HTTPException(error.status_code, {"code": error.code}) from error
+
+    @app.post("/api/testnet/watch/{run_id}/stop")
+    async def testnet_watch_stop(run_id: str, _body: WatchStopInput) -> dict[str, object]:
+        try:
+            return await cast(TestnetPanel, app.state.testnet_panel).stop(run_id)
+        except PanelError as error:
+            raise HTTPException(error.status_code, {"code": error.code}) from error
 
     @app.get("/api/symbols")
     async def symbols(venue: str = "unconfigured") -> dict[str, Any]:

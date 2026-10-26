@@ -7,8 +7,20 @@ const status = {
 }
 
 test.beforeEach(async ({ page }) => {
+  let testnetWatcher = { run_id: null as string | null, cycle_id: null as string | null, symbol: null as 'BTCUSDT' | null, allow_mutations: false, phase: 'idle', health: 'idle', manager_running: false, coverage_observation_fresh: false, snapshot: null }
   await page.route('**/api/**', async (route) => {
     const requestUrl = route.request().url()
+    if (requestUrl.includes('/api/testnet/session')) return route.fulfill({ json: { server_instance_id: 'e2e-server', control_token: 'e2e-token' } })
+    if (requestUrl.includes('/api/testnet/watch/start')) {
+      const payload = route.request().postDataJSON() as { cycle_id: string; confirm_testnet: boolean }
+      testnetWatcher = { run_id: 'e2e-run', cycle_id: payload.cycle_id, symbol: 'BTCUSDT', allow_mutations: payload.confirm_testnet, phase: 'running', health: 'healthy', manager_running: true, coverage_observation_fresh: false, snapshot: null }
+      return route.fulfill({ status: 202, json: { mode: 'testnet', production_enabled: false, server_instance_id: 'e2e-server', observed_at_ms: Date.now(), ledger_status: 'ready', cycles: [{ cycle_id: 'e2e-cycle', symbol: 'BTCUSDT', state: 'ENTRY_SUBMITTED', stop_entry_requested: false, updated_at_ms: Date.now() }], watcher: testnetWatcher } })
+    }
+    if (requestUrl.includes('/api/testnet/watch/e2e-run/stop')) {
+      testnetWatcher = { ...testnetWatcher, phase: 'stopped', health: 'stopped', manager_running: false }
+      return route.fulfill({ json: { mode: 'testnet', production_enabled: false, server_instance_id: 'e2e-server', observed_at_ms: Date.now(), ledger_status: 'ready', cycles: [{ cycle_id: 'e2e-cycle', symbol: 'BTCUSDT', state: 'ENTRY_SUBMITTED', stop_entry_requested: false, updated_at_ms: Date.now() }], watcher: testnetWatcher } })
+    }
+    if (requestUrl.includes('/api/testnet/status')) return route.fulfill({ json: { mode: 'testnet', production_enabled: false, server_instance_id: 'e2e-server', observed_at_ms: Date.now(), ledger_status: 'ready', cycles: [{ cycle_id: 'e2e-cycle', symbol: 'BTCUSDT', state: 'ENTRY_SUBMITTED', stop_entry_requested: false, updated_at_ms: Date.now() }], watcher: testnetWatcher } })
     if (requestUrl.includes('/api/status')) return route.fulfill({ json: status })
     if (requestUrl.includes('/api/paper')) return route.fulfill({ json: { entries_enabled: false, config: null, cash: '0', equity: '0', position: null, orders: [], fills: [], reason: 'Yapılandırılmadı.' } })
     if (requestUrl.includes('/api/symbols')) return route.fulfill({ json: { symbols: ['BTCUSDT', 'SOLUSDT'] } })
@@ -53,4 +65,26 @@ test('390px mobilde navigasyon açık ve paper kontrolleri viewport altında', a
   expect(box).not.toBeNull()
   expect(Math.round((box?.y ?? 0) + (box?.height ?? 0))).toBe(844)
   expect(box?.y ?? 0).toBeGreaterThan(780)
+})
+
+test('Testnet koruma onayıyla izleyiciyi başlatır ve aynı çalışmayı durdurur', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Durum', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Sanal fon izleyicisi' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Yalnız izle' })).toBeVisible()
+  await page.getByRole('checkbox', { name: /Korumayı yönet/ }).check()
+
+  const startRequest = page.waitForRequest((request) => request.url().endsWith('/api/testnet/watch/start'))
+  await page.getByRole('button', { name: 'Korumayı yönet' }).click()
+  expect((await startRequest).postDataJSON()).toEqual({ cycle_id: 'e2e-cycle', confirm_testnet: true })
+  await expect(page.getByRole('definition').filter({ hasText: 'Korumayı yönet' })).toBeVisible()
+  const panelBox = await page.locator('.testnet-panel').boundingBox()
+  expect(panelBox).not.toBeNull()
+  expect((panelBox?.x ?? 0) + (panelBox?.width ?? 0)).toBeLessThanOrEqual(390)
+
+  const stopRequest = page.waitForRequest((request) => request.url().endsWith('/api/testnet/watch/e2e-run/stop'))
+  await page.getByRole('button', { name: 'İzleyiciyi durdur' }).click()
+  await stopRequest
+  await expect(page.getByText('Durduruldu', { exact: true })).toBeVisible()
 })

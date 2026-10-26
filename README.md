@@ -99,8 +99,12 @@ serisinin düşüşüdür; gerçek pozisyon içi portföy maksimum düşüşü h
 Paper dolumları kotasyon miktarıyla sınırlanan simülasyonlardır; borsa kuyruğu değildir.
 
 Testnet imzalama, borsa kuralları, emir sorgulama ve tek alış→OCO akışı ayrı modüldedir;
-[yerel kurulum ve sınırlar](docs/TESTNET.md). Panelden testnet emri gönderilmez.
-Süreli testnet denemesi ayrı komut satırında açık onay ister; stratejiyle yeni işlem açmaz.
+[yerel kurulum ve sınırlar](docs/TESTNET.md). Operasyon bölümündeki Testnet paneli
+mevcut bir çevrimi salt okunur izleyebilir; açık seçimle kalan girişin iptalini ve
+mevcut envanterin korumasını yönetebilir. Yeni alış başlatmaz. İlk süreli Testnet
+girişi ayrı komut satırında açık onay ister; stratejiyle yeni işlem açmaz.
+Panel izleyicisi backend içinde çalışır; tarayıcı kapanınca sürer, backend kapanınca
+veya bilgisayar uyuyunca kesilir. Yeniden başlatma otomatik işlem yetkisi vermez.
 Yeni girişten önce açık emir/yerel kayıt kontrolü çalışır. Salt okunur `testnet_cli audit`
 komutu tutarsızlıkları özetler; mevcut emirleri iptal etmez ve hesap/reset uzlaştırmasının
 tamamlandığını tek başına kanıtlamaz.

@@ -344,15 +344,41 @@ An in-flight pass may finish after a PostgreSQL session disconnect. Durable orde
 remain the duplicate-prevention mechanism; this is not exchange fencing or high-availability
 failover. The lock does not cover manual orders, other Binance applications or arbitrary database writers.
 
+## Backend-owned watcher and local panel
+
+The Operations page lists existing persisted cycles without loading credentials, making
+exchange requests, creating a database, or initializing schema. This is cached local history,
+not current coverage evidence. The separate panel controls start one backend-owned watcher
+for an existing nonclosed cycle; the default is observation only. Explicit Testnet management
+consent uses the same persistent stop-entry and protection rules as the CLI watcher.
+There is no new-entry endpoint, automatic strategy selection, or automatic start/resume.
+
+The task survives browser closure while the backend remains running. Stop cancels only the
+watcher; it does not cancel exchange orders or close positions. Backend shutdown awaits task
+cleanup and releases ownership. Backend restart starts idle. The runtime is one Uvicorn worker,
+not an OS login service or a high-availability deployment. A running CLI manager still owns the
+same cooperative database lock. The UI reports this backend's task, not other processes.
+
+Testnet controls require an exact allowed loopback Origin, JSON content type and a fresh
+per-backend control token. Tokens stay in process/browser memory, never URLs or local storage.
+The browser cannot provide credential/database paths, symbol overrides or order terms.
+Foreign-origin requests and stale tokens are rejected before credential loading. These guards
+are not remote multiuser authentication; the backend must remain loopback-only.
+
+Status snapshots age on both server and client. Failed polling, retries, shutdown, or an
+expired observation cannot retain a fresh-coverage badge. New server identity clears frontend
+consent and prior session state. A returned 'starting' state means task acceptance, not account
+verification or confirmed exchange protection. See [local operations](OPERATIONS.md).
+
 ## Remaining live blockers
 
 Authenticated Testnet partial-fill and adverse failure scenarios remain outstanding, including
 actual network disconnects during submission/cancellation, missing child observations and venue resets.
 The controlled accepted-response discard below verifies a narrower interruption boundary. Successful
 bounded trials do not establish unattended or production reliability.
-Broader unattended entry selection, UI controls, account-wide orphan/reset recovery, third-asset
-commission pricing and production operations remain unfinished. The paper UI is not wired to
-these adapters. Live authorization, 30 calendar days of forward paper observation, economic
+Broader unattended entry selection, new-entry UI controls, account-wide orphan/reset recovery,
+third-asset commission pricing and production operations remain unfinished. The Testnet panel
+manages existing cycles only; paper strategy signals do not drive these adapters. Live authorization, 30 calendar days of forward paper observation, economic
 evidence and independent production approval remain separate blockers.
 
 ## Evidence
