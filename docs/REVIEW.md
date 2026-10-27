@@ -330,3 +330,8 @@ Son yerel paket: 434 başarılı backend testi, yerel PostgreSQL servisi olmadı
 için 167 varyant atlandı; 22 arayüz testi ve 4 tarayıcı akışı geçti. Lint,
 strict tip, build ve diff kontrolleri başarılı. npm audit sıfır açık, pip-audit
 bilinen açık yok. PostgreSQL ve son commit CI kanıtı ilgili PR'da kaydedilir.
+
+İlk arşiv CI koşusu 601 backend testi (SQLite + PostgreSQL 16), 22 arayüz
+ve 4 tarayıcı testini geçti. Güncel pip-audit taraması msgpack 1.2.2 için
+CVE-2026-114613 bildirdi; bağımlılık 1.2.3 düzeltme sürümüne sabitlendi.
+Son sürümün tarama ve CI sonucu ilgili PR'da kaydedilir.
