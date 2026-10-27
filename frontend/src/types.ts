@@ -89,6 +89,8 @@ export interface PaperPosition {
 }
 
 export interface PaperState {
+  session_id: string
+  started_at?: number | null
   active?: boolean
   config?: Record<string, unknown> | null
   cash?: string
@@ -99,6 +101,29 @@ export interface PaperState {
   entries_enabled?: boolean
   reason?: string | null
   [key: string]: unknown
+}
+
+export interface PaperArchiveSummary {
+  session_id: string
+  started_at: number | null
+  archived_at: number
+  config: Record<string, unknown>
+  cash?: string
+  equity?: string
+  realized_pnl?: string
+  order_count: number
+  fill_count: number
+}
+
+export interface PaperArchiveList {
+  items: PaperArchiveSummary[]
+  total: number
+}
+
+export interface PaperArchiveDetail {
+  session_id: string
+  archived_at: number
+  state: PaperState
 }
 
 export interface ApiErrorBody {

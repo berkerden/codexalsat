@@ -31,6 +31,7 @@ const status = {
 }
 
 const paper = {
+  session_id: '11111111-1111-4111-8111-111111111111', started_at: null,
   mode: 'suggestions', entries_enabled: false, config: null, cash: '0', equity: '0',
   position: null, orders: [], fills: [], reason: 'Paper trading henüz yapılandırılmadı.',
 }
@@ -59,6 +60,7 @@ describe('SpotLab dashboard', () => {
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const path = String(input)
       if (path === '/api/status') return json(status)
+      if (path.startsWith('/api/paper/archives?')) return json({ items: [], total: 0 })
       if (path === '/api/paper') return json(paper)
       if (path === '/api/testnet/status') return json({ mode: 'testnet', production_enabled: false, server_instance_id: 'test-server', observed_at_ms: Date.now(), ledger_status: 'ready', cycles: [], watcher: { run_id: null, cycle_id: null, symbol: null, allow_mutations: false, phase: 'idle', health: 'idle', manager_running: false, coverage_observation_fresh: false, snapshot: null } })
       if (path.startsWith('/api/symbols')) return json({ symbols: ['BTCUSDT', 'SOLUSDT'] })
@@ -133,6 +135,7 @@ describe('SpotLab dashboard', () => {
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
       const path = String(input)
       if (path === '/api/status') return json(status)
+      if (path.startsWith('/api/paper/archives?')) return json({ items: [], total: 0 })
       if (path === '/api/paper') return json({ ...paper, config: { symbol: 'BTCUSDT', interval: '15m', strategy: 'pullback' } })
       if (path === '/api/testnet/status') return json({ mode: 'testnet', production_enabled: false, server_instance_id: 'test-server', observed_at_ms: Date.now(), ledger_status: 'ready', cycles: [], watcher: { run_id: null, cycle_id: null, symbol: null, allow_mutations: false, phase: 'idle', health: 'idle', manager_running: false, coverage_observation_fresh: false, snapshot: null } })
       if (path.startsWith('/api/symbols')) return json({ symbols: ['BTCUSDT', 'SOLUSDT'] })
@@ -144,5 +147,60 @@ describe('SpotLab dashboard', () => {
     expect(await screen.findByText(/Oturum:/)).toHaveTextContent('Oturum: BTCUSDT · 15m')
     expect(screen.getByText(/Yetkiyi yenilemek için/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Aynı ayarlarla yetkilendir' })).toBeDisabled()
+  })
+
+  it('durdurulmuş düz PAPER oturumunu açık onayla arşivler ve yeni boş formu gösterir', async () => {
+    const current = {
+      ...paper,
+      started_at: 1_700_000_000_000,
+      config: { symbol: 'BTCUSDT', interval: '5m', strategy: 'pullback', capital: '1000' },
+      cash: '1012', equity: '1012', realized_pnl: '12',
+    }
+    const fresh = { ...paper, session_id: '22222222-2222-4222-8222-222222222222' }
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/status') return json(status)
+      if (path.startsWith('/api/paper/archives?')) return json({ items: [], total: 0 })
+      if (path === '/api/paper') return json(current)
+      if (path === '/api/paper/archive') {
+        expect(JSON.parse(String(init?.body))).toEqual({ expected_session_id: current.session_id, confirm_archive: true })
+        return json(fresh)
+      }
+      if (path === '/api/testnet/status') return json({ mode: 'testnet', production_enabled: false, server_instance_id: 'test-server', observed_at_ms: Date.now(), ledger_status: 'ready', cycles: [], watcher: { run_id: null, cycle_id: null, symbol: null, allow_mutations: false, phase: 'idle', health: 'idle', manager_running: false, coverage_observation_fresh: false, snapshot: null } })
+      if (path.startsWith('/api/symbols')) return json({ symbols: ['BTCUSDT'] })
+      if (path.startsWith('/api/market')) return json(market)
+      return json({ detail: 'Testte tanımsız istek' }, 404)
+    })
+    render(<App />)
+    await userEvent.click(screen.getByRole('button', { name: /Paper işlem/ }))
+    const archive = await screen.findByRole('button', { name: 'PAPER oturumunu arşivle' })
+    expect(archive).toBeDisabled()
+    await userEvent.click(screen.getByRole('checkbox', { name: /arşivlemek istediğimi onaylıyorum/ }))
+    await userEvent.click(archive)
+    expect(await screen.findByRole('button', { name: 'PAPER oturumunu başlat' })).toBeEnabled()
+    expect(screen.getByLabelText('Sanal sermaye (USDT)')).toBeEnabled()
+    expect(screen.getByText(/geçmişi silmez/i)).toBeInTheDocument()
+  })
+
+  it('üst PAPER kontrolü güncel oturum kimliğini taşır', async () => {
+    const running = { ...paper, entries_enabled: true, config: { symbol: 'BTCUSDT', interval: '5m' } }
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/status') return json(status)
+      if (path === '/api/paper') return json(running)
+      if (path === '/api/paper/stop') {
+        expect(JSON.parse(String(init?.body))).toEqual({ expected_session_id: running.session_id })
+        return json({ ...running, entries_enabled: false })
+      }
+      if (path === '/api/testnet/status') return json({ mode: 'testnet', production_enabled: false, server_instance_id: 'test-server', observed_at_ms: Date.now(), ledger_status: 'ready', cycles: [], watcher: { run_id: null, cycle_id: null, symbol: null, allow_mutations: false, phase: 'idle', health: 'idle', manager_running: false, coverage_observation_fresh: false, snapshot: null } })
+      if (path.startsWith('/api/symbols')) return json({ symbols: ['BTCUSDT'] })
+      if (path.startsWith('/api/market')) return json(market)
+      return json({ detail: 'Testte tanımsız istek' }, 404)
+    })
+    render(<App />)
+    const stop = await screen.findByRole('button', { name: 'Girişleri durdur' })
+    await waitFor(() => expect(stop).toBeEnabled())
+    await userEvent.click(stop)
+    await waitFor(() => expect(stop).toBeDisabled())
   })
 })

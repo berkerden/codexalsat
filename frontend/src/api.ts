@@ -1,6 +1,8 @@
 import type {
   ApiErrorBody,
   MarketResponse,
+  PaperArchiveDetail,
+  PaperArchiveList,
   PaperState,
   ResearchReport,
   ResearchRequest,
@@ -76,10 +78,22 @@ export const api = {
   research: (payload: ResearchRequest) =>
     request<ResearchReport>('/api/research', { method: 'POST', body: JSON.stringify(payload) }),
   paper: (signal?: AbortSignal) => request<PaperState>('/api/paper', { signal }),
-  paperStart: (config: Record<string, unknown>) =>
-    request<PaperState>('/api/paper/start', { method: 'POST', body: JSON.stringify(config) }),
-  paperStop: () => request<PaperState>('/api/paper/stop', { method: 'POST', body: '{}' }),
-  paperClose: () => request<PaperState>('/api/paper/close', { method: 'POST', body: '{}' }),
+  paperStart: (config: Record<string, unknown>, expectedSessionId: string) =>
+    request<PaperState>('/api/paper/start', {
+      method: 'POST', body: JSON.stringify({ ...config, expected_session_id: expectedSessionId }),
+    }),
+  paperStop: (expectedSessionId: string) =>
+    request<PaperState>('/api/paper/stop', { method: 'POST', body: JSON.stringify({ expected_session_id: expectedSessionId }) }),
+  paperClose: (expectedSessionId: string) =>
+    request<PaperState>('/api/paper/close', { method: 'POST', body: JSON.stringify({ expected_session_id: expectedSessionId }) }),
+  paperArchiveCurrent: (expectedSessionId: string) =>
+    request<PaperState>('/api/paper/archive', {
+      method: 'POST', body: JSON.stringify({ expected_session_id: expectedSessionId, confirm_archive: true }),
+    }),
+  paperArchives: (limit: number, offset: number, signal?: AbortSignal) =>
+    request<PaperArchiveList>(`/api/paper/archives?limit=${limit}&offset=${offset}`, { signal }),
+  paperArchiveDetail: (sessionId: string, signal?: AbortSignal) =>
+    request<PaperArchiveDetail>(`/api/paper/archives/${encodeURIComponent(sessionId)}`, { signal }),
   testnetStatus: (signal?: AbortSignal) => request<TestnetStatusResponse>('/api/testnet/status', { signal }),
   testnetSession: (signal?: AbortSignal) => request<TestnetSessionResponse>('/api/testnet/session', { signal }),
   testnetWatchStart: (cycleId: string, confirmTestnet: boolean, token: string, signal?: AbortSignal) =>

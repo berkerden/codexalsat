@@ -14,19 +14,31 @@ simülasyon çıkışı bekler; gerçek borsa koruması varmış gibi yorumlanam
 
 ## Ayrı paper deneyi
 
-Mevcut paper oturumunun sembol, periyot ve risk kapsamı değiştirilemez; panelde
-üstteki piyasa seçimi başka olsa bile kayıtlı kapsam ayrıca gösterilir. Bu sürümde
-panel içinden yeni oturum/arşivleme akışı yoktur. Farklı bir sanal deney için önce
-girişleri durdurun, açık paper pozisyonunu kapatın ve sunucuları kapatın. Eski
-kayıtları silmeden ayrı veri diziniyle başlatın:
+Mevcut paper oturumunun sembol, periyot ve risk kapsamı sabittir. Farklı bir
+coin veya strateji denemek için Paper bölümünden:
 
-```bash
-SPOTLAB_DATA_DIR=data/ikinci-deney bash scripts/run-local.sh
-```
+1. **Girişleri durdur** ile yeni sanal girişleri kapatın.
+2. Açık pozisyon varsa **Paper pozisyonunu kapat** isteğini verin ve güncel
+   kotasyonla kalan miktarın sıfırlanmasını bekleyin. Kısmi çıkış tamamlanmadan
+   arşivleme yapılamaz.
+3. Oturumun geçmişiyle arşivlenmesine ilişkin onayı seçip arşivleme düğmesini
+   kullanın. Kayıtlı ayarlar, sanal bakiye, emirler, dolumlar ve denetim kayıtları
+   aynı veritabanında salt okunur geçmiş olarak korunur.
+4. Boş deney formunda yeni coin/periyot ve sanal risk sınırlarını seçin. Yeni
+   deney yalnız **Paper oturumu başlat** ile ayrıca yetkilendirilir.
 
-Bu dizinin ayrı sanal bakiyesi ve piyasa arşivi olur. Eski oturuma geri dönmek için
-sunucuları kapatıp önceki SPOTLAB_DATA_DIR ile başlatın; girişler kapalı başlar.
-Bu işlem gerçek hesap sıfırlaması veya canlı risk sınırını aşma yolu değildir.
+Arşivleme giriş yetkisi vermez, pozisyon kapatmaz ve geçmişi silmez. Etkin veya
+açık pozisyonlu oturum reddedilir. Arşivler Paper bölümünde listelenir ve
+ayrıntıları okunabilir; yeniden etkinleştirme veya silme kontrolü yoktur.
+Her deneyin bakiyesi ayrıdır; birden çok deneyin getirisi tek hesap performansı
+veya kesintisiz ileri gözlem süresi olarak birleştirilmez. Eski oturuma ait
+gecikmiş istekler yeni deneyde çalıştırılmaz.
+
+Tamamen ayrı yerel veri alanı gerekiyorsa sunucular kapalıyken
+`SPOTLAB_DATA_DIR=data/ikinci-deney bash scripts/run-local.sh` kullanılabilir.
+Bu dizinin ayrı sanal bakiyesi ve piyasa arşivi olur. Önceki dizine dönüldüğünde
+girişler kapalı başlar. Paper arşivleme Testnet defterini etkilemez; gerçek hesap
+sıfırlaması veya canlı risk sınırını aşma yolu değildir.
 
 ## Yedek ve geri yükleme
 
@@ -40,8 +52,15 @@ cp -p data/paper.sqlite "backups/paper-$(date -u +%Y%m%dT%H%M%SZ).sqlite"
 
 Geri yükleme öncesi mevcut dosyayı farklı bir adla koruyun. Yedeği `data/paper.sqlite`
 konumuna kopyalayın ve backend'i başlatın. Başlangıç tüm giriş yetkisini sıfırlar;
-açık pozisyonlar/fills/nakit korunur. `test_restore_verified_and_does_not_restore_authorization`
+açık pozisyonlar, dolumlar, nakit ve arşiv tablosu korunur. `test_restore_verified_and_does_not_restore_authorization`
 ve yeniden başlatma testleri mantıksal yedek geri yükleme değişmezlerini doğrular.
+Programatik `PaperEngine.backup` mantıksal yedeğinin sürüm 2 biçimi mevcut
+oturumu ve bütün arşivleri aynı işlemden okur. `restore` yalnız henüz
+yapılandırılmamış ve arşivsiz hedefe uygulanabilir; mevcut deney veya arşiv
+üzerine yazmaz. Eski sürüm 1 yedekleri de boş hedefe yüklenebilir. Geri yükleme
+aktif oturuma yeni kimlik verir, geçmiş arşiv kimliklerini korur ve girişleri
+kapalı bırakır. Panelde geri yükleme veya arşiv silme yolu bulunmaz.
+
 Yedekler kişisel veri içerir; Git'e veya genel paylaşıma yüklenmez.
 
 PostgreSQL için backend kapalıyken `pg_dump` alın; boş ayrı test veritabanına

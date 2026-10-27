@@ -295,3 +295,38 @@ CI veya güvenlik ayarı değişmediğini doğruladı. Saat güncellemesi ve Tü
 etiketler önceki iki düzeltmeyi koruyor; bağımsız regresyonlar tekrar geçti.
 Güncellenen bağımlılıklarla yerel tam backend, 17 arayüz, 3 tarayıcı testi ve
 npm audit / pip-audit taramaları geçti (bilinen açık yok).
+
+
+## Paper deney arşivi — 27 Ekim 2026
+
+Astra/high tasarım, Sol/high backend ve Sol/medium arayüz uygulaması. Kullanım
+sınırından sonra ana oturum eksik kontrolleri ve düzeltmeleri tamamladı.
+Astra/high bağımsız son incelemesi kaynak ve gerçek test çıktılarıyla yapıldı.
+
+Giderilen bulgular:
+- P1: geri yükleme eksik/negatif pozisyon alanlarını ve JSON sayısı biçimindeki
+  parasal alanları kabul ediyordu. Eksik stop işçiyi durdurabiliyor; float nakit
+  ondalık muhasebeyi bozuyordu. Şema 1 ve 2 için para yalnız sonlu ondalık metin,
+  pozisyon/kapsam/sayaç/zaman ve emir/dolum/denetim kayıtları yapısal olarak
+  doğrulanır. Geçersiz yedek hedefe yazılmadan reddedilir.
+- P2: ayarı eksik ama eski bakiye/dolum içeren yedek yeni sermayeyle eski
+  sonuçları karıştırabiliyordu. Yapılandırmasız durum gerçekten boş olmalıdır.
+- P2: aynı arşive yeniden tıklama veya hata sonrası aynı kaydı açma sonsuz
+  yükleniyor durumunda kalabiliyordu. Her seçim yeni ayrıntı isteği üretir.
+
+Bağımsız tekrar doğrulamada açık P1/P2 yok. Ana oturumun testleri geçmiş GET
+yanıtını, eski işçi başarı/hatasını, gecikmiş başlatma/kapatmayı, çift arşivleme
+ve arşiv/başlat yarışını, INSERT sonrası UPDATE hatasında tam geri almayı
+kapsar. Bağımsız 8.34 birim örneğinde 1014.99532 sanal nakit, 14.99532 K/Z
+ve iki dolum arşivde korunur. Çoklu arşivli yedek farklı boş hedefe taşınır;
+yeni deney 2000 sanal sermaye ve sıfır geçmişle başlar.
+
+Masaüstünde geçici sentetik veriyle arşivleme, boş form ve salt okunur ayrıntı
+görsel doğrulandı; 390px mobil akış tarayıcı testiyle sınandı. Gerçek hesap,
+API anahtarı veya Binance isteği kullanılmadı. PostgreSQL varyantları CI'da
+çalışır; bu inceleme canlı kullanım onayı değildir.
+
+Son yerel paket: 434 başarılı backend testi, yerel PostgreSQL servisi olmadığı
+için 167 varyant atlandı; 22 arayüz testi ve 4 tarayıcı akışı geçti. Lint,
+strict tip, build ve diff kontrolleri başarılı. npm audit sıfır açık, pip-audit
+bilinen açık yok. PostgreSQL ve son commit CI kanıtı ilgili PR'da kaydedilir.

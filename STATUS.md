@@ -1,4 +1,4 @@
-# Durum — 2026-10-26
+# Durum — 2026-10-27
 
 Yerel kaynak gerçek `berkerden/codexalsat` clone'udur. Public depo kullanılır.
 PR #3 araştırma/paper sürümünü main’e taşıdı; issue #2 canlı öncesi kalan işleri izler.
@@ -147,3 +147,34 @@ Yerel paket 381 başarılı / 161 PostgreSQL varyantı atlandı; 17 arayüz test
 Astra/high bağımsız incelemesinde iki P2 giderilip tekrar doğrulandı; açık
 P1/P2 yok. Gerçek anahtar veya borsa isteği kullanılmadı. PostgreSQL ve son
 bağımlılık sürümlerinin CI kanıtı ilgili PR'da kaydedilir. Üretim kapalıdır.
+
+
+PR #15 main'e birleştirildi (da55277); test edilen f5e5098 için CI 40246691600
+542 backend (SQLite + PostgreSQL 16), 17 arayüz ve 3 tarayıcı testini geçti.
+Gizli bilgi taraması ve iki bağımlılık denetimi temiz; yerel kaynak eşitlendi.
+
+
+27 Ekim — paper deney arşivi
+
+Paper ekranında durdurulmuş ve pozisyonsuz deney açık onayla arşivlenir;
+ayarlar, bakiye, emir/dolum ve denetim geçmişi korunur. Yeni boş deney ayrı
+kimlikle oluşur ve ayrıca başlatılır. Sayfalı arşiv listesi ve salt okunur
+ayrıntı ekranı eklendi; deney sonuçları tek bir performansa birleştirilmez.
+
+Oturum kimliği tüm paper kontrollerinde ve ağ bekleyen işçide doğrulanır.
+Gecikmiş yanıt yeni deneye işlem veya hata durdurması taşıyamaz. Arşiv yazımı
+ve yeni boş durum tek işlemde; hata iki değişikliği de geri alır. Mantıksal
+yedek sürüm 2 tüm arşivleri korur, yalnız boş hedefe yüklenir. Eski sürüm 1
+yedek desteklenir; giriş yetkisi geri yüklenmez. Bozuk pozisyon, sayısal
+para alanı veya yapılandırmasız geçmiş bakiye/dolum içeren yedek reddedilir.
+
+Bağımsız Astra/high incelemesinde bir P1 ve iki P2 giderildi; yeniden
+doğrulamada kapsam içinde açık P1/P2 yok. Sol/high backend ve Sol/medium
+arayüz uygulamasını yaptı; kullanım sınırından sonra kalan düzeltmeler ve
+testler ana oturumda tamamlandı. Gerçek hesap, anahtar veya borsa isteği
+kullanılmadı. Canlı kapalı; ileri gözlem süresi ve avantaj kanıtı hâlâ eksik.
+
+Son yerel paket: 434 başarılı backend testi, yerel PostgreSQL servisi olmadığı
+için 167 varyant atlandı; 22 arayüz testi ve 4 tarayıcı akışı geçti. Lint,
+strict tip, build ve diff kontrolleri başarılı. npm audit sıfır açık, pip-audit
+bilinen açık yok. PostgreSQL ve son commit CI kanıtı ilgili PR'da kaydedilir.

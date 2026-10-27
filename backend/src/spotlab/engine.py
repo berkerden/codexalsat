@@ -10,7 +10,7 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from decimal import ROUND_DOWN, Decimal
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
@@ -21,6 +21,14 @@ from spotlab.contracts import INTERVAL_MS, Quote
 
 D = Decimal
 ZERO = D(0)
+
+
+class PaperConflictError(ValueError):
+    """The requested mutation no longer applies to the current paper session."""
+
+
+class PaperArchiveNotFoundError(LookupError):
+    """The requested immutable paper archive does not exist."""
 
 
 class PaperConfig(BaseModel):
@@ -56,6 +64,8 @@ def millis() -> int:
 
 def empty_state() -> dict[str, Any]:
     return {
+        "session_id": str(uuid.uuid4()),
+        "started_at": None,
         "mode": "suggestions",
         "entries_enabled": False,
         "config": None,
@@ -79,6 +89,10 @@ def empty_state() -> dict[str, Any]:
     }
 
 
+LEGACY_STATE_KEYS = frozenset(empty_state()) - {"session_id", "started_at"}
+STATE_KEYS = frozenset(empty_state())
+
+
 class PaperEngine:
     def __init__(self, database_url: str) -> None:
         options: dict[str, Any] = {}
@@ -99,11 +113,35 @@ class PaperEngine:
                 ),
                 {"payload": json.dumps(empty_state())},
             )
+            conn.execute(
+                text(
+                    "CREATE TABLE IF NOT EXISTS paper_archives "
+                    "(session_id TEXT PRIMARY KEY, archived_at BIGINT NOT NULL, "
+                    "payload TEXT NOT NULL)"
+                )
+            )
         # A process restart never restores entry authorization. Positions remain.
         with self.transaction() as (_, state):
+            legacy = "session_id" not in state
+            state.setdefault("session_id", str(uuid.uuid4()))
+            state.setdefault("started_at", self._legacy_started_at(state))
             state["entries_enabled"] = False
             state["reason"] = "Başlangıç uzlaştırması: yeni girişler kapalı."
-            self._audit(state, "restart", "Giriş yetkisi sıfırlandı; paper kayıtları korundu")
+            if not legacy:
+                self._audit(state, "restart", "Giriş yetkisi sıfırlandı; paper kayıtları korundu")
+
+    @staticmethod
+    def _legacy_started_at(state: dict[str, Any]) -> int | None:
+        for event in state.get("audit", []):
+            if (
+                isinstance(event, dict)
+                and event.get("event") == "paper_start"
+                and isinstance(event.get("time"), int)
+                and not isinstance(event.get("time"), bool)
+                and event["time"] >= 0
+            ):
+                return int(event["time"])
+        return None
 
     @contextmanager
     def transaction(self) -> Iterator[tuple[Connection, dict[str, Any]]]:
@@ -131,28 +169,54 @@ class PaperEngine:
         with self.db.connect() as conn:
             value = conn.execute(text("SELECT payload FROM bot_state WHERE id=1")).scalar_one()
         state: dict[str, Any] = json.loads(value)
+        return self._public_state(state)
+
+    @staticmethod
+    def _public_state(state: dict[str, Any]) -> dict[str, Any]:
+        state = dict(state)
         state["simulation"] = True
         state["fee_assumption"] = "Komisyon kotasyon varlığında; kullanıcının paper varsayımı."
         state["daily_timezone"] = "UTC"
+        return state
+
+    @classmethod
+    def _capture(cls, state: dict[str, Any]) -> dict[str, Any]:
+        return cls._public_state(json.loads(json.dumps(state)))
+
+    @staticmethod
+    def _expect_session(state: dict[str, Any], expected_session_id: str | None) -> None:
+        if expected_session_id is not None and state["session_id"] != expected_session_id:
+            raise PaperConflictError("Paper oturumu değişti; işlem uygulanmadı.")
+
+    def assert_current_session(self, expected_session_id: str) -> dict[str, Any]:
+        state = self.snapshot()
+        self._expect_session(state, expected_session_id)
         return state
 
     @staticmethod
     def _audit(state: dict[str, Any], event: str, message: str) -> None:
         state["audit"].append({"time": millis(), "event": event, "message": message})
 
-    def start(self, config: PaperConfig, now: int | None = None) -> dict[str, Any]:
+    def start(
+        self,
+        config: PaperConfig,
+        now: int | None = None,
+        *,
+        expected_session_id: str | None = None,
+    ) -> dict[str, Any]:
         at = millis() if now is None else now
         with self.transaction() as (_, state):
+            self._expect_session(state, expected_session_id)
             previous = state["config"]
             new = config.model_dump(mode="json")
             if previous and previous != new:
-                raise ValueError(
-                    "Mevcut paper oturumunun ayarları değiştirilemez; "
-                    "yeni deney için ayrı veritabanı kullanın."
+                raise PaperConflictError(
+                    "Mevcut paper oturumunun ayarları değiştirilemez; önce güvenle arşivleyin."
                 )
             if not previous:
                 state.update(
                     {
+                        "started_at": at,
                         "cash": str(config.capital),
                         "equity": str(config.capital),
                         "peak": str(config.capital),
@@ -170,24 +234,34 @@ class PaperEngine:
                 }
             )
             self._audit(state, "paper_start", "Süreli paper giriş yetkisi etkinleştirildi")
-        return self.snapshot()
+            result = self._capture(state)
+        return result
 
-    def stop(self, reason: str = "Kullanıcı yeni girişleri durdurdu.") -> dict[str, Any]:
+    def stop(
+        self,
+        reason: str = "Kullanıcı yeni girişleri durdurdu.",
+        *,
+        expected_session_id: str | None = None,
+    ) -> dict[str, Any]:
         with self.transaction() as (_, state):
+            self._expect_session(state, expected_session_id)
             state["entries_enabled"] = False
             state["reason"] = reason
             self._audit(state, "stop_entries", reason)
-        return self.snapshot()
+            result = self._capture(state)
+        return result
 
-    def request_close(self) -> dict[str, Any]:
+    def request_close(self, *, expected_session_id: str | None = None) -> dict[str, Any]:
         """Persist an exit intent before any network operation; keep retrying its remainder."""
         with self.transaction() as (_, state):
+            self._expect_session(state, expected_session_id)
             state["entries_enabled"] = False
             if state["position"]:
                 state["position"]["exit_reason"] = "manual_close"
             state["reason"] = "Paper kapatma isteği kaydedildi; güncel kotasyon bekleniyor."
             self._audit(state, "request_close", state["reason"])
-        return self.snapshot()
+            result = self._capture(state)
+        return result
 
     @staticmethod
     def _day(at: int) -> str:
@@ -218,31 +292,35 @@ class PaperEngine:
         healthy: bool = True,
         now: int | None = None,
         force_close: bool = False,
+        expected_session_id: str | None = None,
     ) -> dict[str, Any]:
         at = millis() if now is None else now
         with self.transaction() as (_, state):
+            self._expect_session(state, expected_session_id)
             if not state["config"]:
-                return self.snapshot()
-            cfg = PaperConfig.model_validate(state["config"])
-            if not self._valid_quote(quote, at, cfg.symbol):
-                state["entries_enabled"] = False
-                state["reason"] = (
-                    "Eski veya geçersiz veri: girişler durdu; çıkış güncel fiyat bekliyor."
-                )
+                result = self._capture(state)
             else:
-                self._tick_valid(
-                    state,
-                    cfg,
-                    quote,
-                    signal,
-                    candle_time,
-                    step,
-                    min_notional,
-                    healthy,
-                    at,
-                    force_close,
-                )
-        return self.snapshot()
+                cfg = PaperConfig.model_validate(state["config"])
+                if not self._valid_quote(quote, at, cfg.symbol):
+                    state["entries_enabled"] = False
+                    state["reason"] = (
+                        "Eski veya geçersiz veri: girişler durdu; çıkış güncel fiyat bekliyor."
+                    )
+                else:
+                    self._tick_valid(
+                        state,
+                        cfg,
+                        quote,
+                        signal,
+                        candle_time,
+                        step,
+                        min_notional,
+                        healthy,
+                        at,
+                        force_close,
+                    )
+                result = self._capture(state)
+        return result
 
     def _mark(self, state: dict[str, Any], cfg: PaperConfig, bid: Decimal, at: int) -> None:
         equity = D(state["cash"])
@@ -436,29 +514,392 @@ class PaperEngine:
             }
         )
 
+    @staticmethod
+    def _orders_resolved(state: dict[str, Any]) -> bool:
+        orders = state.get("orders")
+        return isinstance(orders, list) and all(
+            isinstance(order, dict) and order.get("status") == "FILLED" for order in orders
+        )
+
+    @classmethod
+    def _validate_state(cls, candidate: Any, *, legacy: bool = False) -> dict[str, Any]:
+        if not isinstance(candidate, dict):
+            raise ValueError("Yedek durumu geçersiz")
+        required = LEGACY_STATE_KEYS if legacy else STATE_KEYS
+        if set(candidate) != required:
+            raise ValueError("Yedek şeması geçersiz")
+        state = dict(candidate)
+        if not legacy:
+            try:
+                parsed = uuid.UUID(state["session_id"])
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ValueError("Paper oturum kimliği geçersiz") from exc
+            if str(parsed) != state["session_id"]:
+                raise ValueError("Paper oturum kimliği geçersiz")
+            started_at = state["started_at"]
+            if started_at is not None and (
+                not isinstance(started_at, int) or isinstance(started_at, bool) or started_at < 0
+            ):
+                raise ValueError("Paper başlangıç zamanı geçersiz")
+
+        def amount(value: Any, *, positive: bool = False, signed: bool = False) -> Decimal:
+            if not isinstance(value, str):
+                raise ValueError("Paper parasal değerleri ondalık metin olmalıdır")
+            try:
+                parsed_amount = D(value)
+            except InvalidOperation as exc:
+                raise ValueError("Paper parasal alanı geçersiz") from exc
+            if not parsed_amount.is_finite() or (not signed and parsed_amount < 0):
+                raise ValueError("Paper parasal alanı geçersiz")
+            if positive and parsed_amount <= 0:
+                raise ValueError("Paper miktarı/fiyatı pozitif olmalıdır")
+            return parsed_amount
+
+        def integer(value: Any) -> None:
+            if type(value) is not int or value < 0:
+                raise ValueError("Paper sayaç/zaman alanı geçersiz")
+
+        def record(value: Any, fields: set[str], optional: set[str] | None = None) -> None:
+            if not isinstance(value, dict) or not fields <= value.keys():
+                raise ValueError("Paper kayıt alanları eksik")
+            if value.keys() - fields - (optional or set()):
+                raise ValueError("Paper kayıt alanları geçersiz")
+
+        if type(state["entries_enabled"]) is not bool or not isinstance(state["reason"], str):
+            raise ValueError("Paper giriş/açıklama durumu geçersiz")
+        if state["mode"] not in ("paper", "suggestions"):
+            raise ValueError("Paper çalışma kipi geçersiz")
+        for key in ("daily_trades", "loss_streak", "last_signal_time", "expires_at"):
+            integer(state[key])
+        if not isinstance(state["day"], str):
+            raise ValueError("Paper UTC günü geçersiz")
+        if state["day"]:
+            try:
+                if datetime.strptime(state["day"], "%Y-%m-%d").date().isoformat() != state["day"]:
+                    raise ValueError("Paper UTC günü geçersiz")
+            except ValueError as exc:
+                raise ValueError("Paper UTC günü geçersiz") from exc
+        cfg = None
+        if state["config"] is not None:
+            record(state["config"], set(PaperConfig.model_fields))
+            for key, field in PaperConfig.model_fields.items():
+                if field.annotation is Decimal:
+                    amount(state["config"][key])
+                elif field.annotation is int:
+                    integer(state["config"][key])
+            cfg = PaperConfig.model_validate(state["config"])
+            if state["mode"] != "paper" or not state["day"]:
+                raise ValueError("Yapılandırılmış paper durumu tutarsız")
+        elif state["position"] is not None or state["entries_enabled"]:
+            raise ValueError("Yapılandırmasız pozisyon/yetki geri yüklenemez")
+        for name in ("orders", "fills", "audit"):
+            if not isinstance(state[name], list):
+                raise ValueError("Paper geçmişi geçersiz")
+        for name in ("cash", "equity", "peak", "day_start_equity", "daily_loss", "drawdown"):
+            amount(state[name])
+        if amount(state["drawdown"]) > 1:
+            raise ValueError("Paper düşüş oranı geçersiz")
+        amount(state["realized_pnl"], signed=True)
+        for event in state["audit"]:
+            record(event, {"time", "event", "message"})
+            integer(event["time"])
+            if not isinstance(event["event"], str) or not isinstance(event["message"], str):
+                raise ValueError("Paper denetim kaydı geçersiz")
+        orders = {}
+        for order in state["orders"]:
+            record(order, {"intent_id", "side", "status", "quantity", "time", "simulation"})
+            identity = order["intent_id"]
+            if not isinstance(identity, str) or not identity or identity in orders:
+                raise ValueError("Paper emir kimliği geçersiz/yinelenmiş")
+            if order["side"] not in ("BUY", "SELL") or order["status"] != "FILLED":
+                raise ValueError("Paper emir durumu geçersiz")
+            if order["simulation"] is not True:
+                raise ValueError("Paper kaydı sanal olmalıdır")
+            integer(order["time"])
+            amount(order["quantity"], positive=True)
+            orders[identity] = order
+        seen_fills: set[str] = set()
+        for fill in state["fills"]:
+            record(
+                fill,
+                {
+                    "trade_id",
+                    "side",
+                    "quantity",
+                    "price",
+                    "fee",
+                    "pnl",
+                    "time",
+                    "reason",
+                    "simulation",
+                },
+            )
+            identity = fill["trade_id"]
+            if not isinstance(identity, str) or identity not in orders or identity in seen_fills:
+                raise ValueError("Paper dolum kimliği geçersiz/yinelenmiş")
+            if fill["simulation"] is not True or not isinstance(fill["reason"], str):
+                raise ValueError("Paper dolum kaydı geçersiz")
+            integer(fill["time"])
+            amount(fill["quantity"], positive=True)
+            amount(fill["price"], positive=True)
+            amount(fill["fee"])
+            amount(fill["pnl"], signed=True)
+            if any(fill[key] != orders[identity][key] for key in ("side", "quantity", "time")):
+                raise ValueError("Paper emir/dolum kaydı uyuşmuyor")
+            seen_fills.add(identity)
+        if seen_fills != orders.keys():
+            raise ValueError("Paper dolum kaydı eksik")
+        if cfg is None:
+            zero_fields = (
+                "cash",
+                "equity",
+                "peak",
+                "day_start_equity",
+                "daily_loss",
+                "drawdown",
+                "realized_pnl",
+            )
+            counters = ("daily_trades", "loss_streak", "last_signal_time", "expires_at")
+            if (
+                any(D(state[key]) != 0 for key in zero_fields)
+                or any(state[key] != 0 for key in counters)
+                or state["orders"]
+                or state["fills"]
+                or state["day"]
+                or state["mode"] != "suggestions"
+                or (not legacy and state["started_at"] is not None)
+            ):
+                raise ValueError("Yapılandırmasız paper durumu boş olmalıdır")
+        position = state["position"]
+        if position is not None:
+            record(
+                position,
+                {
+                    "symbol",
+                    "quantity",
+                    "entry",
+                    "cost_basis",
+                    "stop",
+                    "target",
+                    "opened_at",
+                    "expires_at",
+                    "protection",
+                },
+                {"exit_pnl", "exit_reason"},
+            )
+            if cfg is None or position["symbol"] != cfg.symbol:
+                raise ValueError("Paper pozisyon kapsamı uyuşmuyor")
+            for key in ("quantity", "entry", "stop", "target"):
+                amount(position[key], positive=True)
+            amount(position["cost_basis"])
+            if "exit_pnl" in position:
+                amount(position["exit_pnl"], signed=True)
+            for key in ("opened_at", "expires_at"):
+                integer(position[key])
+            if position["expires_at"] < position["opened_at"]:
+                raise ValueError("Paper pozisyon süresi geçersiz")
+            if not D(position["stop"]) < D(position["entry"]) < D(position["target"]):
+                raise ValueError("Paper pozisyon seviyeleri geçersiz")
+            if not isinstance(position["protection"], str) or not isinstance(
+                position.get("exit_reason", ""), str
+            ):
+                raise ValueError("Paper pozisyon açıklaması geçersiz")
+        return state
+
+    @classmethod
+    def _validate_archive(cls, candidate: Any) -> tuple[str, int, dict[str, Any]]:
+        if not isinstance(candidate, dict) or set(candidate) != {
+            "session_id",
+            "archived_at",
+            "state",
+        }:
+            raise ValueError("Arşiv yedeği geçersiz")
+        state = cls._validate_state(candidate["state"])
+        session_id = candidate["session_id"]
+        archived_at = candidate["archived_at"]
+        if session_id != state["session_id"]:
+            raise ValueError("Arşiv oturum kimliği uyuşmuyor")
+        if not isinstance(archived_at, int) or isinstance(archived_at, bool) or archived_at < 0:
+            raise ValueError("Arşiv zamanı geçersiz")
+        if (
+            not state["config"]
+            or state["entries_enabled"]
+            or state["position"] is not None
+            or not cls._orders_resolved(state)
+        ):
+            raise ValueError("Etkin veya tamamlanmamış durum arşiv geçmişi olamaz")
+        return session_id, archived_at, state
+
+    @staticmethod
+    def _is_pristine(state: dict[str, Any]) -> bool:
+        baseline = empty_state()
+        ignored = {"session_id", "reason", "audit"}
+        if any(state.get(key) != value for key, value in baseline.items() if key not in ignored):
+            return False
+        audit = state.get("audit")
+        return isinstance(audit, list) and all(
+            isinstance(event, dict) and event.get("event") == "restart" for event in audit
+        )
+
+    def archive(self, expected_session_id: str, now: int | None = None) -> dict[str, Any]:
+        archived_at = millis() if now is None else now
+        with self.transaction() as (conn, state):
+            self._expect_session(state, expected_session_id)
+            if not state["config"]:
+                raise PaperConflictError("Yapılandırılmamış paper oturumu arşivlenemez.")
+            if state["entries_enabled"]:
+                raise PaperConflictError("Yeni girişler açıkken paper oturumu arşivlenemez.")
+            if state["position"] is not None:
+                raise PaperConflictError("Açık veya kısmi pozisyon arşivlenemez.")
+            if not self._orders_resolved(state):
+                raise PaperConflictError("Çözümlenmemiş veya bozuk paper emri var.")
+            self._audit(state, "archive", "Paper oturumu değişmez geçmişe arşivlendi")
+            archived_state = json.loads(json.dumps(state))
+            conn.execute(
+                text(
+                    "INSERT INTO paper_archives (session_id,archived_at,payload) "
+                    "VALUES (:session_id,:archived_at,:payload)"
+                ),
+                {
+                    "session_id": state["session_id"],
+                    "archived_at": archived_at,
+                    "payload": json.dumps(archived_state),
+                },
+            )
+            state.clear()
+            state.update(empty_state())
+            result = self._capture(state)
+        return result
+
+    def archives(self, *, limit: int = 20, offset: int = 0) -> dict[str, Any]:
+        with self.db.connect() as conn, conn.begin():
+            total = int(conn.execute(text("SELECT COUNT(*) FROM paper_archives")).scalar_one())
+            rows = conn.execute(
+                text(
+                    "SELECT session_id, archived_at, payload FROM paper_archives "
+                    "ORDER BY archived_at DESC, session_id DESC LIMIT :limit OFFSET :offset"
+                ),
+                {"limit": limit, "offset": offset},
+            ).mappings()
+            items = []
+            for row in rows:
+                state = json.loads(row["payload"])
+                items.append(
+                    {
+                        "session_id": row["session_id"],
+                        "started_at": state["started_at"],
+                        "archived_at": row["archived_at"],
+                        "config": state["config"],
+                        "cash": state["cash"],
+                        "equity": state["equity"],
+                        "realized_pnl": state["realized_pnl"],
+                        "order_count": len(state["orders"]),
+                        "fill_count": len(state["fills"]),
+                    }
+                )
+        return {"items": items, "total": total}
+
+    def archive_detail(self, session_id: str) -> dict[str, Any]:
+        with self.db.connect() as conn:
+            row = (
+                conn.execute(
+                    text(
+                        "SELECT archived_at, payload FROM paper_archives "
+                        "WHERE session_id=:session_id"
+                    ),
+                    {"session_id": session_id},
+                )
+                .mappings()
+                .one_or_none()
+            )
+        if row is None:
+            raise PaperArchiveNotFoundError("Paper arşivi bulunamadı")
+        return {
+            "session_id": session_id,
+            "archived_at": row["archived_at"],
+            "state": self._public_state(json.loads(row["payload"])),
+        }
+
     def backup(self, destination: str) -> None:
         # Portable transactional logical backup, no credentials in the payload.
         from pathlib import Path
 
-        with self.transaction() as (_, state):
+        with self.transaction() as (conn, state):
+            rows = conn.execute(
+                text(
+                    "SELECT session_id, archived_at, payload FROM paper_archives "
+                    "ORDER BY archived_at, session_id"
+                )
+            ).mappings()
+            archives = [
+                {
+                    "session_id": row["session_id"],
+                    "archived_at": row["archived_at"],
+                    "state": json.loads(row["payload"]),
+                }
+                for row in rows
+            ]
             Path(destination).write_text(
-                json.dumps({"schema": 1, "state": state}), encoding="utf-8"
+                json.dumps({"schema": 2, "current": state, "archives": archives}),
+                encoding="utf-8",
             )
 
     def restore(self, source: str) -> None:
         from pathlib import Path
 
         payload = json.loads(Path(source).read_text(encoding="utf-8"))
-        if payload.get("schema") != 1 or set(payload.get("state", {})) != set(empty_state()):
+        if not isinstance(payload, dict):
             raise ValueError("Yedek şeması geçersiz")
-        restored = payload["state"]
-        if restored["config"]:
-            PaperConfig.model_validate(restored["config"])
-        with self.transaction() as (_, state):
-            if state["position"] or state["entries_enabled"]:
-                raise ValueError("Etkin paper oturumu üstüne geri yükleme yapılamaz")
+        if payload.get("schema") == 1 and set(payload) == {"schema", "state"}:
+            restored = self._validate_state(payload["state"], legacy=True)
+            original_session_id = None
+            restored["session_id"] = str(uuid.uuid4())
+            restored["started_at"] = (
+                self._legacy_started_at(restored) if restored["config"] else None
+            )
+            archives: list[tuple[str, int, dict[str, Any]]] = []
+        elif payload.get("schema") == 2 and set(payload) == {
+            "schema",
+            "current",
+            "archives",
+        }:
+            restored = self._validate_state(payload["current"])
+            original_session_id = restored["session_id"]
+            if not isinstance(payload["archives"], list):
+                raise ValueError("Arşiv listesi geçersiz")
+            archives = [self._validate_archive(item) for item in payload["archives"]]
+            archive_ids = [item[0] for item in archives]
+            if len(archive_ids) != len(set(archive_ids)):
+                raise ValueError("Yinelenen arşiv oturum kimliği")
+            if original_session_id in set(archive_ids):
+                raise ValueError("Etkin oturum arşiv geçmişinde yinelenemez")
+            restored["session_id"] = str(uuid.uuid4())
+        else:
+            raise ValueError("Yedek şeması geçersiz")
+        restored["entries_enabled"] = False
+        restored["reason"] = "Yedek yüklendi; girişler kapalı, uzlaştırma gerekli."
+        identity_message = (
+            f"Yedek yüklendi; önceki oturum kimliği {original_session_id}; "
+            "giriş yetkisi geri yüklenmedi"
+            if original_session_id
+            else "Eski şema yüklendi; yeni oturum kimliği atandı; giriş yetkisi geri yüklenmedi"
+        )
+        self._audit(restored, "restore", identity_message)
+        with self.transaction() as (conn, state):
+            count = int(conn.execute(text("SELECT COUNT(*) FROM paper_archives")).scalar_one())
+            if not self._is_pristine(state) or count:
+                raise ValueError("Yalnızca boş bir paper veritabanına geri yükleme yapılabilir")
+            for session_id, archived_at, archived_state in archives:
+                conn.execute(
+                    text(
+                        "INSERT INTO paper_archives (session_id,archived_at,payload) "
+                        "VALUES (:session_id,:archived_at,:payload)"
+                    ),
+                    {
+                        "session_id": session_id,
+                        "archived_at": archived_at,
+                        "payload": json.dumps(archived_state),
+                    },
+                )
             state.clear()
             state.update(restored)
-            state["entries_enabled"] = False
-            state["reason"] = "Yedek yüklendi; girişler kapalı, uzlaştırma gerekli."
-            self._audit(state, "restore", "Yedek yüklendi; giriş yetkisi geri yüklenmedi")
