@@ -34,7 +34,9 @@ kendiliğinden açmaz. Durdurmak için `Ctrl+C`; açık paper pozisyonları kay�
    girin. Sonuçlar kronolojik örneklem dışı test, maliyet stresi ve belirsizlik içerir.
 3. Paper bölümünde sanal sermaye/risk sınırlarını inceleyip süreli oturumu açın.
    Örnek başlangıç alanları canlı hesap ayarı değildir. Komisyon kotasyon varlığında
-   varsayılır. Aynı oturumun risk ayarları sessizce değiştirilemez.
+   varsayılır. Aynı oturumun risk ayarları sessizce değiştirilemez. Farklı deney
+   için girişleri durdurun, pozisyonu kapatın ve oturumu geçmişiyle arşivleyin.
+   Yeni deney ayrı başlatılır; arşivler Paper ekranından okunabilir.
 4. **Yeni girişleri durdur** mevcut pozisyonun çıkış yönetimini korur.
    **Bot pozisyonlarını kapat** sadece sanal bot pozisyonunu kapatır; bağlantı yoksa
    istek kalıcı olarak bekler. Hiçbir manuel borsa varlığına erişilmez.

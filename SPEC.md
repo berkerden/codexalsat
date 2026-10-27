@@ -29,9 +29,17 @@ Para ve emir miktarlarında float yok. Gözlem/durum/işlem kayıtları Git dı�
 - `POST /api/research`: belirtilen sembol, zaman aralığı, periyotlar, maliyet
   varsayımları ile tekrar üretilebilir araştırma; kısa veri pilot olarak etiketlenir.
 - `GET /api/paper`: yalnız sanal bakiye, emir, pozisyon ve gerçekleşmeler.
-- `POST /api/paper/start`: kullanıcı girilmiş sanal sermaye/risk ile başlatma.
+- `POST /api/paper/start`: kullanıcı girilmiş sanal sermaye/risk ile başlatma;
+  düz yapılandırma gövdesine `expected_session_id` eklenir.
 - `POST /api/paper/stop`: girişleri durdurma; açık pozisyon yönetimi sürer.
 - `POST /api/paper/close`: yalnız paper bot pozisyonlarını kapatma.
+- `POST /api/paper/archive`: `expected_session_id` ve gerçek boolean
+  `confirm_archive: true` ile yalnız durdurulmuş, pozisyonsuz deneyi arşivler;
+  yeni kimlikli, yapılandırılmamış ve girişleri kapalı paper durumunu döndürür.
+- `GET /api/paper/archives?limit=20&offset=0`: sayfalı salt okunur özet ve toplam.
+- `GET /api/paper/archives/{session_id}`: değişmez arşiv durumu ve arşiv zamanı.
+- Paper durumu boşken de `session_id` taşır; stop/close gövdeleri de
+  `expected_session_id` ister. Oturum uyuşmazlığı 409 ile reddedilir.
 - `POST /api/live/activate`: değerlendirme engelleri bitmeden reddedilir.
 - `GET /api/testnet/status`: yalnız yerel çevrim kayıtları ve bu backend'in izleyicisi;
   hesap sorgusu, anahtar okuma veya defter/şema oluşturma yapmaz.
@@ -98,6 +106,14 @@ penceresi karar zamanından önce bitmeli; örnekler örtüşmemeli. Benzerlik o
     ister; tarayıcıdan dosya yolu, anahtar, sembol veya yeni emir şartı alınmaz.
     Tek görev backend'e aittir; tarayıcı kapanması onu durdurmaz. Backend kapanması
     görevi bitirir. Eski, başarısız veya durdurulmuş gözlem koruma kanıtı değildir.
+
+15. Paper arşivleme, mevcut oturum kilidi altında tam geçmişi koruyup yeni boş
+    oturum oluşturur. Etkin giriş veya açık/kısmi pozisyon varken uygulanmaz.
+    Yeni oturum otomatik başlamaz. Ağ bekleyen eski işçi, kapatma veya başlatma
+    isteği yeni oturumu değiştiremez; kilit altında oturum kimliği doğrulanır.
+    Arşivler ayrı deneylerdir; arşivleme zarar geçmişini aynı deneyde sıfırlamaz.
+    Mantıksal yedek mevcut durumla tüm arşivleri tutarlı okur; geri yükleme
+    yalnız boş hedefe yapılır, giriş yetkisi geri yüklenmez.
 
 ## Aşama kabulü ve operasyon
 

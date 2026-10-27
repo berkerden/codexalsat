@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { api, errorMessage } from './api'
 import { CandleChart } from './components/CandleChart'
 import { JsonDetails } from './components/JsonDetails'
@@ -7,6 +7,8 @@ import { TestnetPanel } from './components/TestnetPanel'
 import { decimal, money, time } from './format'
 import type {
   MarketResponse,
+  PaperArchiveDetail,
+  PaperArchiveSummary,
   PaperState,
   ResearchReport,
   ResearchRequest,
@@ -46,6 +48,7 @@ const emptyPaperForm = {
 }
 
 type PaperForm = typeof emptyPaperForm
+type PaperCommand = 'start' | 'stop' | 'close' | 'archive'
 
 function ModeRail({ status, paper, onNavigate }: {
   status: StatusResponse | null
@@ -83,6 +86,17 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0)
   const [now, setNow] = useState(Date.now)
   const [controlError, setControlError] = useState('')
+  const [paperBusy, setPaperBusy] = useState(false)
+  const paperRef = useRef<PaperState | null>(null)
+  const paperSequenceRef = useRef(0)
+  const paperCommandPendingRef = useRef(false)
+  const retiredPaperSessionsRef = useRef(new Set<string>())
+
+  const acceptPaper = useCallback((sequence: number, next: PaperState) => {
+    if (sequence !== paperSequenceRef.current || retiredPaperSessionsRef.current.has(next.session_id)) return
+    paperRef.current = next
+    setPaper(next)
+  }, [])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -90,18 +104,20 @@ function App() {
     const poll = () => {
       if (pending) return
       pending = true
-      Promise.allSettled([api.status(controller.signal), api.paper(controller.signal)]).then(([statusResult, paperResult]) => {
+      const paperSequence = paperCommandPendingRef.current ? null : ++paperSequenceRef.current
+      const paperRequest = paperSequence === null ? Promise.resolve(null) : api.paper(controller.signal)
+      Promise.allSettled([api.status(controller.signal), paperRequest]).then(([statusResult, paperResult]) => {
         if (controller.signal.aborted) return
         if (statusResult.status === 'fulfilled') { setStatus(statusResult.value); setStatusError('') }
         else setStatusError(errorMessage(statusResult.reason))
-        if (paperResult.status === 'fulfilled') setPaper(paperResult.value)
+        if (paperSequence !== null && paperResult.status === 'fulfilled' && paperResult.value) acceptPaper(paperSequence, paperResult.value)
       }).finally(() => { pending = false })
     }
     poll()
     const pollId = window.setInterval(poll, 3_000)
     const clockId = window.setInterval(() => setNow(Date.now()), 1_000)
     return () => { controller.abort(); window.clearInterval(pollId); window.clearInterval(clockId) }
-  }, [])
+  }, [acceptPaper])
 
   useEffect(() => {
     if (!venue) return
@@ -153,9 +169,33 @@ function App() {
   }
   const changeSymbol = (next: string) => { setSymbol(next); setMarket(null); setMarketLoading(Boolean(next)) }
   const changeInterval = (next: string) => { setInterval(next); setMarket(null); setMarketLoading(Boolean(symbol)) }
-  const paperControl = async (action: () => Promise<PaperState>) => {
+  const paperControl = async (command: PaperCommand, config?: Record<string, unknown>): Promise<PaperState> => {
+    const current = paperRef.current
+    if (!current?.session_id) throw new Error('Paper oturum kimliği alınamadı; durum yenilenene kadar bekleyin.')
+    if (paperCommandPendingRef.current) throw new Error('Başka bir paper kontrolü tamamlanıyor.')
+    const expectedSessionId = current.session_id
+    const sequence = ++paperSequenceRef.current
+    paperCommandPendingRef.current = true
+    setPaperBusy(true)
     setControlError('')
-    try { setPaper(await action()) } catch (cause) { setControlError(errorMessage(cause)) }
+    try {
+      let next: PaperState
+      if (command === 'start') next = await api.paperStart(config ?? {}, expectedSessionId)
+      else if (command === 'stop') next = await api.paperStop(expectedSessionId)
+      else if (command === 'close') next = await api.paperClose(expectedSessionId)
+      else next = await api.paperArchiveCurrent(expectedSessionId)
+      if (command === 'archive') retiredPaperSessionsRef.current.add(expectedSessionId)
+      acceptPaper(sequence, next)
+      return next
+    } catch (cause) {
+      if (sequence === paperSequenceRef.current) setControlError(errorMessage(cause))
+      throw cause
+    } finally {
+      if (sequence === paperSequenceRef.current) {
+        paperCommandPendingRef.current = false
+        setPaperBusy(false)
+      }
+    }
   }
 
   return (
@@ -184,8 +224,8 @@ function App() {
           </nav>
           <div className="top-actions">
             <div className="paper-kill-switch" aria-label="Paper acil kontrolleri">
-              <button disabled={!paper?.entries_enabled} onClick={() => void paperControl(api.paperStop)}>Girişleri durdur</button>
-              <button disabled={!paper?.position} onClick={() => void paperControl(api.paperClose)}>Pozisyonu kapat</button>
+              <button disabled={paperBusy || !paper?.session_id || !paper.entries_enabled} onClick={() => void paperControl('stop').catch(() => undefined)}>Girişleri durdur</button>
+              <button disabled={paperBusy || !paper?.session_id || !paper.position} onClick={() => void paperControl('close').catch(() => undefined)}>Pozisyonu kapat</button>
             </div>
             <div className="connection-pill"><span className={statusError ? 'bad' : ''} />{statusError ? 'API erişilemiyor' : 'Yerel bağlantı'}</div>
           </div>
@@ -232,7 +272,7 @@ function App() {
           {controlError && <div className="alert error" role="alert"><b>Paper kontrolü başarısız</b><span>{controlError}</span></div>}
           {tab === 'overview' && <Overview venue={venue} market={market} loading={marketLoading} status={status} now={now} />}
           {tab === 'research' && <Research venue={venue} symbol={symbol} interval={interval} />}
-          {tab === 'paper' && <Paper venue={venue} symbol={symbol} interval={interval} paper={paper} onPaper={setPaper} />}
+          {tab === 'paper' && <Paper key={paper?.session_id ?? 'paper-loading'} venue={venue} symbol={symbol} interval={interval} paper={paper} busy={paperBusy} onCommand={paperControl} />}
           {tab === 'operations' && <Operations status={status} paper={paper} error={statusError} />}
         </div>
       </main>
@@ -401,12 +441,28 @@ function ResearchResult({ report, sessionReports }: { report: ResearchReport; se
   )
 }
 
-function Paper({ venue, symbol, interval, paper, onPaper }: {
-  venue: Venue | ''; symbol: string; interval: string; paper: PaperState | null; onPaper: (value: PaperState) => void
+function Paper({ venue, symbol, interval, paper, busy, onCommand }: {
+  venue: Venue | ''
+  symbol: string
+  interval: string
+  paper: PaperState | null
+  busy: boolean
+  onCommand: (command: PaperCommand, config?: Record<string, unknown>) => Promise<PaperState>
 }) {
   const [form, setForm] = useState<PaperForm>(emptyPaperForm)
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [archiveConfirmed, setArchiveConfirmed] = useState(false)
+  const [archiveRefresh, setArchiveRefresh] = useState(0)
+  const [archiveOffset, setArchiveOffset] = useState(0)
+  const [archives, setArchives] = useState<PaperArchiveSummary[]>([])
+  const [archiveTotal, setArchiveTotal] = useState(0)
+  const [archivesLoading, setArchivesLoading] = useState(true)
+  const [archivesError, setArchivesError] = useState('')
+  const [selectedArchiveId, setSelectedArchiveId] = useState<string | null>(null)
+  const [archiveDetail, setArchiveDetail] = useState<PaperArchiveDetail | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailRequestRevision, setDetailRequestRevision] = useState(0)
+  const archiveLimit = 20
   const locked = Boolean(paper?.config)
   const sessionSymbol = typeof paper?.config?.symbol === 'string' ? paper.config.symbol : ''
   const sessionInterval = typeof paper?.config?.interval === 'string' ? paper.config.interval : ''
@@ -420,17 +476,64 @@ function Paper({ venue, symbol, interval, paper, onPaper }: {
       ) as PaperForm
     : form
 
+  const canArchive = Boolean(paper?.session_id && paper.config && !paper.entries_enabled && !paper.position)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    api.paperArchives(archiveLimit, archiveOffset, controller.signal)
+      .then((result) => {
+        if (controller.signal.aborted) return
+        setArchives(result.items)
+        setArchiveTotal(result.total)
+      })
+      .catch((cause: unknown) => { if (!controller.signal.aborted) setArchivesError(errorMessage(cause)) })
+      .finally(() => { if (!controller.signal.aborted) setArchivesLoading(false) })
+    return () => controller.abort()
+  }, [archiveOffset, archiveRefresh])
+
+  useEffect(() => {
+    if (!selectedArchiveId) return
+    const controller = new AbortController()
+    api.paperArchiveDetail(selectedArchiveId, controller.signal)
+      .then((result) => { if (!controller.signal.aborted) setArchiveDetail(result) })
+      .catch((cause: unknown) => { if (!controller.signal.aborted) setArchivesError(errorMessage(cause)) })
+      .finally(() => { if (!controller.signal.aborted) setDetailLoading(false) })
+    return () => controller.abort()
+  }, [selectedArchiveId, detailRequestRevision])
+
   const update = (key: keyof PaperForm, value: string) => setForm((current) => ({ ...current, [key]: value }))
-  const mutate = async (action: () => Promise<PaperState>) => {
-    setLoading(true); setError('')
-    try { onPaper(await action()) } catch (cause) { setError(errorMessage(cause)) } finally { setLoading(false) }
+  const selectArchive = (sessionId: string | null) => {
+    setArchiveDetail(null)
+    setDetailLoading(Boolean(sessionId))
+    setArchivesError('')
+    setSelectedArchiveId(sessionId)
+    setDetailRequestRevision((value) => value + 1)
+  }
+  const changeArchiveOffset = (nextOffset: number) => {
+    setArchivesLoading(true)
+    setArchivesError('')
+    setSelectedArchiveId(null)
+    setArchiveDetail(null)
+    setArchiveOffset(nextOffset)
+  }
+  const mutate = async (command: PaperCommand, config?: Record<string, unknown>) => {
+    setError('')
+    try { return await onCommand(command, config) } catch (cause) { setError(errorMessage(cause)); return null }
   }
   const start = (event: FormEvent) => {
     event.preventDefault()
     if (!venue || !symbol) return setError('Önce borsa ve parite seçin.')
     const integerKeys = new Set(['hold_minutes', 'max_trades_per_day', 'max_consecutive_losses', 'authorization_minutes'])
     const config = Object.fromEntries(Object.entries(displayedForm).map(([key, value]) => [key, integerKeys.has(key) ? Number(value) : value]))
-    void mutate(() => api.paperStart({ venue, symbol, interval, ...config }))
+    void mutate('start', { venue, symbol, interval, ...config })
+  }
+  const archiveCurrent = async () => {
+    if (!archiveConfirmed || !canArchive) return
+    const result = await mutate('archive')
+    if (!result) return
+    setArchiveOffset(0)
+    setSelectedArchiveId(null)
+    setArchiveRefresh((value) => value + 1)
   }
   const position = paper?.position
 
@@ -448,7 +551,7 @@ function Paper({ venue, symbol, interval, paper, onPaper }: {
           <div className="panel-heading"><div><span className="eyebrow">Yalnız paper</span><h2>Sanal deney ayarları</h2>{locked && <p className="session-scope">Oturum: <b>{sessionSymbol}</b> · <b>{sessionInterval}</b></p>}</div>{locked && <span className="lock-tag">Sabit kayıt</span>}</div>
           <p className="form-copy">{locked ? 'Bu oturumun ayarları değiştirilemez. Başlat düğmesi aynı ayarlarla süreli giriş yetkisini yeniler.' : 'Alanlarda yalnız paper için düzenlenebilir bir 1.000 USDT deney örneği var. Bunlar gerçek sermaye veya canlı risk yetkisi değildir.'}</p>
           {contextMismatch && <div className="inline-error scope-warning" role="status">Yetkiyi yenilemek için üstte <b>{sessionSymbol}</b> ve <b>{sessionInterval}</b> seçin. Mevcut paper oturumunun kapsamı değiştirilemez.</div>}
-          <fieldset disabled={locked || loading}>
+          <fieldset disabled={locked || busy}>
             <div className="form-grid">
               <label className="field"><span>Strateji</span><select value={displayedForm.strategy} onChange={(e) => update('strategy', e.target.value)}><option value="pullback">Trend geri çekilmesi</option><option value="breakout">Hacimli kırılım</option><option value="mean_reversion">Ortalamaya dönüş</option></select></label>
               <Field label="Sanal sermaye (USDT)" value={displayedForm.capital} onChange={(v) => update('capital', v)} placeholder="Siz girin" required inputMode="decimal" />
@@ -469,8 +572,8 @@ function Paper({ venue, symbol, interval, paper, onPaper }: {
           </fieldset>
           {error && <div className="inline-error" role="alert">{error}</div>}
           <div className="button-row">
-            <button className="primary-button" disabled={loading || !venue || !symbol || contextMismatch}>{locked ? 'Aynı ayarlarla yetkilendir' : 'Paper oturumu başlat'}</button>
-            <button type="button" className="secondary-button" disabled={loading || !paper?.entries_enabled} onClick={() => void mutate(api.paperStop)}>Girişleri durdur</button>
+            <button className="primary-button" disabled={busy || !paper?.session_id || !venue || !symbol || contextMismatch}>{locked ? 'Aynı ayarlarla yetkilendir' : 'PAPER oturumunu başlat'}</button>
+            <button type="button" className="secondary-button" disabled={busy || !paper?.session_id || !paper.entries_enabled} onClick={() => void mutate('stop')}>Girişleri durdur</button>
           </div>
         </form>
         <section className="panel paper-state">
@@ -478,11 +581,99 @@ function Paper({ venue, symbol, interval, paper, onPaper }: {
           {position ? <JsonDetails value={position} title="Açık paper pozisyonu" /> : <EmptyInner title="Açık pozisyon yok" text="Motor yalnız doğrulanmış bir sinyal ve tüm risk kontrolleri geçtiğinde sanal pozisyon açar." />}
           <div className="ledger-counts"><span><b>{paper?.orders?.length ?? 0}</b> emir kaydı</span><span><b>{paper?.fills?.length ?? 0}</b> sanal dolum</span></div>
           {paper && <JsonDetails value={paper} title="Tüm paper durumu" />}
-          <button className="danger-button" disabled={loading || !position} onClick={() => void mutate(api.paperClose)}>Paper pozisyonunu kapat</button>
+          <button className="danger-button" disabled={busy || !paper?.session_id || !position} onClick={() => void mutate('close')}>PAPER pozisyonunu kapat</button>
           <p className="fine-print">Durdurmak yalnız yeni girişleri kapatır. Açık sanal pozisyon yönetimi devam eder.</p>
+          <div className="archive-current">
+            <div><span className="eyebrow">Oturumu kapat</span><h3>PAPER deneyini arşivle</h3></div>
+            <p>Bu işlem geçmişi silmez. Durdurulmuş ve açık pozisyonu olmayan oturumu salt okunur arşive taşır; ardından yeni, boş bir PAPER formu açılır.</p>
+            <label className="archive-confirm">
+              <input type="checkbox" checked={archiveConfirmed} onChange={(event) => setArchiveConfirmed(event.target.checked)} disabled={busy || !canArchive} />
+              <span>Bu PAPER oturumunu arşivlemek istediğimi onaylıyorum.</span>
+            </label>
+            <button type="button" className="archive-button" disabled={busy || !canArchive || !archiveConfirmed} onClick={() => void archiveCurrent()}>PAPER oturumunu arşivle</button>
+            {!canArchive && <small className="archive-hint">Arşiv için oturum yapılandırılmış, girişler durdurulmuş ve pozisyon kapatılmış olmalıdır.</small>}
+          </div>
         </section>
       </div>
+      <PaperArchives
+        items={archives}
+        total={archiveTotal}
+        offset={archiveOffset}
+        limit={archiveLimit}
+        loading={archivesLoading}
+        error={archivesError}
+        selectedId={selectedArchiveId}
+        detail={archiveDetail}
+        detailLoading={detailLoading}
+        onSelect={selectArchive}
+        onOffset={changeArchiveOffset}
+      />
     </>
+  )
+}
+
+function PaperArchives({ items, total, offset, limit, loading, error, selectedId, detail, detailLoading, onSelect, onOffset }: {
+  items: PaperArchiveSummary[]
+  total: number
+  offset: number
+  limit: number
+  loading: boolean
+  error: string
+  selectedId: string | null
+  detail: PaperArchiveDetail | null
+  detailLoading: boolean
+  onSelect: (sessionId: string | null) => void
+  onOffset: (offset: number) => void
+}) {
+  const showingFrom = total === 0 ? 0 : offset + 1
+  const showingTo = Math.min(offset + items.length, total)
+  return (
+    <section className="panel archive-panel" aria-labelledby="paper-archives-title">
+      <div className="panel-heading">
+        <div><span className="eyebrow">Salt okunur PAPER kayıtları</span><h2 id="paper-archives-title">Deney arşivi</h2></div>
+        <span className="count-badge" aria-label={`${total} arşivlenmiş oturum`}>{total}</span>
+      </div>
+      <p className="form-copy">Arşiv kayıtları yalnız geçmiş sanal deneyleri gösterir; gerçek kazanç veya gelecekteki sonuçlara ilişkin kanıt değildir.</p>
+      {error && <div className="inline-error" role="alert">{error}</div>}
+      {loading ? <div className="archive-loading" aria-live="polite">PAPER arşivi alınıyor…</div> : items.length === 0 ? (
+        <EmptyInner title="Arşivlenmiş PAPER oturumu yok" text="Uygun bir deney arşivlendiğinde geçmişi burada salt okunur olarak kalır." />
+      ) : (
+        <div className="archive-browser">
+          <div className="archive-list" aria-label="Arşivlenmiş PAPER oturumları">
+            {items.map((item) => {
+              const symbol = typeof item.config?.symbol === 'string' ? item.config.symbol : 'PAPER'
+              const interval = typeof item.config?.interval === 'string' ? item.config.interval : '—'
+              return (
+                <button key={item.session_id} className={selectedId === item.session_id ? 'selected' : ''} aria-pressed={selectedId === item.session_id} onClick={() => onSelect(item.session_id)}>
+                  <span><b>PAPER</b>{symbol} · {interval}</span>
+                  <small>{time(item.archived_at, true)} · {item.order_count} emir · {item.fill_count} dolum</small>
+                  <i>{money(item.realized_pnl)}</i>
+                </button>
+              )
+            })}
+            <div className="archive-pagination" aria-label="PAPER arşivi sayfalama">
+              <button disabled={offset === 0 || loading} onClick={() => onOffset(Math.max(0, offset - limit))}>Önceki</button>
+              <span>{showingFrom}–{showingTo} / {total}</span>
+              <button disabled={offset + items.length >= total || loading} onClick={() => onOffset(offset + limit)}>Sonraki</button>
+            </div>
+          </div>
+          <div className="archive-detail" aria-live="polite">
+            {detailLoading ? <div className="archive-loading">PAPER kaydı açılıyor…</div> : detail && detail.session_id === selectedId ? (
+              <>
+                <div className="archive-detail-heading"><span className="paper-readonly-tag">PAPER · SALT OKUNUR</span><b>{detail.session_id}</b><small>{time(detail.archived_at, true)}</small></div>
+                <dl className="metric-grid">
+                  <div><dt>Sanal nakit</dt><dd>{money(detail.state.cash)}</dd></div>
+                  <div><dt>Sanal özsermaye</dt><dd>{money(detail.state.equity)}</dd></div>
+                  <div><dt>Emir kaydı</dt><dd>{detail.state.orders?.length ?? 0}</dd></div>
+                  <div><dt>Sanal dolum</dt><dd>{detail.state.fills?.length ?? 0}</dd></div>
+                </dl>
+                <JsonDetails value={detail.state} title="Salt okunur PAPER oturumu" />
+              </>
+            ) : <EmptyInner title="Bir PAPER kaydı seçin" text="Arşivdeki oturumun değiştirilemeyen ayrıntıları burada gösterilir." />}
+          </div>
+        </div>
+      )}
+    </section>
   )
 }
 

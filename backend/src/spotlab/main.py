@@ -16,12 +16,18 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from spotlab import __version__
 from spotlab.contracts import INTERVAL_MS, Quote
-from spotlab.engine import PaperConfig, PaperEngine, millis
+from spotlab.engine import (
+    PaperArchiveNotFoundError,
+    PaperConfig,
+    PaperConflictError,
+    PaperEngine,
+    millis,
+)
 from spotlab.finance import CostModel
 from spotlab.market import (
     BinanceMarket,
@@ -79,6 +85,24 @@ class ResearchInput(BaseModel):
     days: int = Field(default=180, ge=1, le=365)
     hold_minutes: int = Field(default=60, ge=1, le=10080)
     costs: CostsInput = Field(default_factory=CostsInput)
+
+
+class PaperStartInput(PaperConfig):
+    expected_session_id: str = Field(min_length=1, max_length=64)
+
+
+class PaperMutationInput(BaseModel):
+    expected_session_id: str = Field(min_length=1, max_length=64)
+
+
+class PaperArchiveInput(PaperMutationInput):
+    confirm_archive: bool = Field(strict=True)
+
+    @model_validator(mode="after")
+    def confirmed(self) -> "PaperArchiveInput":
+        if self.confirm_archive is not True:
+            raise ValueError("Arşivleme açıkça onaylanmalıdır")
+        return self
 
 
 def venue_check(venue: str) -> None:
@@ -154,6 +178,12 @@ def create_app(database_url: str | None = None, *, run_worker: bool = True) -> F
     async def local_origin(request: Request, call_next: Any) -> Any:
         origin = request.headers.get("origin")
         is_testnet_path = request.url.path.startswith("/api/testnet/")
+        is_paper_mutation = request.url.path in {
+            "/api/paper/start",
+            "/api/paper/stop",
+            "/api/paper/close",
+            "/api/paper/archive",
+        }
         if request.url.path in {"/api/testnet/session", "/api/testnet/status"}:
             foreign_origin = origin is not None and origin not in TRUSTED_LOOPBACK_ORIGINS
             cross_site = request.headers.get("sec-fetch-site", "").lower() == "cross-site"
@@ -182,6 +212,15 @@ def create_app(database_url: str | None = None, *, run_worker: bool = True) -> F
             and origin not in configured_origins
         ):
             return JSONResponse(status_code=403, content={"detail": "İzin verilmeyen kaynak"})
+        if request.method == "POST" and is_paper_mutation:
+            if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
+                return JSONResponse(status_code=403, content={"detail": "İzin verilmeyen kaynak"})
+            content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            if content_type != "application/json":
+                return JSONResponse(
+                    status_code=415,
+                    content={"detail": {"code": "json_content_type_required"}},
+                )
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -195,6 +234,10 @@ def create_app(database_url: str | None = None, *, run_worker: bool = True) -> F
                 "detail": "Borsa verisi alınamadı veya kalitesi uygun değil. Yeni işlem açılmaz."
             },
         )
+
+    @app.exception_handler(PaperConflictError)
+    async def paper_conflict(_request: Request, error: PaperConflictError) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(error)})
 
     @app.get("/api/status")
     async def status() -> dict[str, Any]:
@@ -350,24 +393,29 @@ def create_app(database_url: str | None = None, *, run_worker: bool = True) -> F
         return app.state.engine.snapshot()
 
     @app.post("/api/paper/start")
-    async def paper_start(body: PaperConfig) -> Any:
-        venue_check(body.venue)
-        info = await app.state.market.exchange_info(body.symbol)
+    async def paper_start(body: PaperStartInput) -> Any:
+        config = PaperConfig.model_validate(body.model_dump(exclude={"expected_session_id"}))
+        app.state.engine.assert_current_session(body.expected_session_id)
+        venue_check(config.venue)
+        info = await app.state.market.exchange_info(config.symbol)
         try:
             filters(info)
-            result = app.state.engine.start(body)
+            result = app.state.engine.start(config, expected_session_id=body.expected_session_id)
+        except PaperConflictError:
+            raise
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        await select_stream(app, body.symbol)
+        await select_stream(app, config.symbol)
         return result
 
     @app.post("/api/paper/stop")
-    async def paper_stop() -> Any:
-        return app.state.engine.stop()
+    async def paper_stop(body: PaperMutationInput) -> Any:
+        return app.state.engine.stop(expected_session_id=body.expected_session_id)
 
     @app.post("/api/paper/close")
-    async def paper_close() -> Any:
-        state = app.state.engine.request_close()
+    async def paper_close(body: PaperMutationInput) -> Any:
+        expected = body.expected_session_id
+        state = app.state.engine.request_close(expected_session_id=expected)
         if state["position"]:
             cfg = PaperConfig.model_validate(state["config"])
             q = await current_quote(app, cfg.symbol)
@@ -378,8 +426,27 @@ def create_app(database_url: str | None = None, *, run_worker: bool = True) -> F
                 step=D("0.00000001"),
                 min_notional=D(0),
                 force_close=True,
+                expected_session_id=expected,
             )
         return state
+
+    @app.post("/api/paper/archive")
+    async def paper_archive(body: PaperArchiveInput) -> Any:
+        return app.state.engine.archive(body.expected_session_id)
+
+    @app.get("/api/paper/archives")
+    async def paper_archives(
+        limit: int = Query(default=20, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+    ) -> Any:
+        return app.state.engine.archives(limit=limit, offset=offset)
+
+    @app.get("/api/paper/archives/{session_id}")
+    async def paper_archive_detail(session_id: str) -> Any:
+        try:
+            return app.state.engine.archive_detail(session_id)
+        except PaperArchiveNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
 
     @app.post("/api/live/activate")
     async def live_activate() -> None:
@@ -429,12 +496,18 @@ async def paper_cycle(app: FastAPI) -> None:
     state = app.state.engine.snapshot()
     if not state["config"] or not (state["entries_enabled"] or state["position"]):
         return
+    expected_session_id = state["session_id"]
     cfg = PaperConfig.model_validate(state["config"])
     try:
         quote = await current_quote(app, cfg.symbol)
         if state["position"]:
             app.state.engine.tick(
-                quote, signal=False, candle_time=0, step=D("0.00000001"), min_notional=D(0)
+                quote,
+                signal=False,
+                candle_time=0,
+                step=D("0.00000001"),
+                min_notional=D(0),
+                expected_session_id=expected_session_id,
             )
             app.state.worker_error = None
             return
@@ -455,10 +528,19 @@ async def paper_cycle(app: FastAPI) -> None:
             step=step,
             min_notional=minimum,
             healthy=quality.ok and clock.synchronized,
+            expected_session_id=expected_session_id,
         )
         app.state.worker_error = None
+    except PaperConflictError:
+        return
     except (MarketDataError, OSError, ValueError, TimeoutError):
-        app.state.engine.stop("Veri bağlantısı/kalitesi bozuldu; girişler durduruldu.")
+        try:
+            app.state.engine.stop(
+                "Veri bağlantısı/kalitesi bozuldu; girişler durduruldu.",
+                expected_session_id=expected_session_id,
+            )
+        except PaperConflictError:
+            return
         app.state.worker_error = "Veri hatası; kayıtlı çıkış isteği ve pozisyon yönetimi korunuyor."
 
 

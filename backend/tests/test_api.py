@@ -78,7 +78,13 @@ def test_manual_close_survives_quote_outage(client: TestClient) -> None:
     with patch(
         "spotlab.main.current_quote", AsyncMock(side_effect=MarketDataUnavailable("offline"))
     ):
-        assert client.post("/api/paper/close").status_code == 503
+        assert (
+            client.post(
+                "/api/paper/close",
+                json={"expected_session_id": client.app.state.engine.snapshot()["session_id"]},
+            ).status_code
+            == 503
+        )
     engine = client.app.state.engine
     assert engine.snapshot()["position"]["exit_reason"] == "manual_close"
     assert not engine.snapshot()["entries_enabled"]
@@ -132,3 +138,69 @@ def test_research_invalid_input_is_422_without_network(client: TestClient) -> No
         },
     )
     assert response.status_code == 422
+
+
+def test_paper_archive_api_requires_json_fence_and_literal_confirmation(
+    client: TestClient,
+) -> None:
+    engine = client.app.state.engine
+    session_id = engine.snapshot()["session_id"]
+    assert client.post("/api/paper/stop").status_code == 415
+    for payload in (
+        {"expected_session_id": session_id},
+        {"expected_session_id": session_id, "confirm_archive": False},
+        {"expected_session_id": session_id, "confirm_archive": 1},
+        {"expected_session_id": session_id, "confirm_archive": "true"},
+    ):
+        assert client.post("/api/paper/archive", json=payload).status_code == 422
+
+    start_payload = paper_config().model_dump(mode="json")
+    start_payload["expected_session_id"] = session_id
+    with patch.object(
+        client.app.state.market,
+        "exchange_info",
+        AsyncMock(
+            return_value={
+                "status": "TRADING",
+                "isSpotTradingAllowed": True,
+                "filters": [
+                    {"filterType": "LOT_SIZE", "stepSize": "0.01"},
+                    {"filterType": "MIN_NOTIONAL", "minNotional": "5"},
+                ],
+            }
+        ),
+    ):
+        assert client.post("/api/paper/start", json=start_payload).status_code == 200
+    assert (
+        client.post(
+            "/api/paper/archive",
+            json={"expected_session_id": session_id, "confirm_archive": True},
+        ).status_code
+        == 409
+    )
+    assert (
+        client.post("/api/paper/stop", json={"expected_session_id": session_id}).status_code == 200
+    )
+    archived = client.post(
+        "/api/paper/archive",
+        json={"expected_session_id": session_id, "confirm_archive": True},
+    )
+    assert archived.status_code == 200
+    assert archived.json()["session_id"] != session_id
+    assert client.get("/api/paper/archives").json()["total"] == 1
+    assert client.get(f"/api/paper/archives/{session_id}").status_code == 200
+    assert (
+        client.post("/api/paper/stop", json={"expected_session_id": session_id}).status_code == 409
+    )
+
+
+def test_paper_mutation_origin_allows_cli_and_denies_cross_site(client: TestClient) -> None:
+    session_id = client.app.state.engine.snapshot()["session_id"]
+    payload = {"expected_session_id": session_id}
+    assert client.post("/api/paper/stop", json=payload).status_code == 200
+    assert (
+        client.post(
+            "/api/paper/stop", json=payload, headers={"Sec-Fetch-Site": "cross-site"}
+        ).status_code
+        == 403
+    )

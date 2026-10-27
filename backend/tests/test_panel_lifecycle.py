@@ -129,7 +129,11 @@ def test_custom_cors_does_not_widen_testnet_control(tmp_path: Path, monkeypatch)
         app.state.testnet_panel.credentials_loader = loader
         token = client.get("/api/testnet/session").json()["control_token"]
         assert (
-            client.post("/api/paper/stop", headers={"Origin": "https://custom.example"}).status_code
+            client.post(
+                "/api/paper/stop",
+                headers={"Origin": "https://custom.example"},
+                json={"expected_session_id": client.get("/api/paper").json()["session_id"]},
+            ).status_code
             == 200
         )
         for endpoint in ("status", "session"):

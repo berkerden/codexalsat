@@ -8,6 +8,8 @@ const status = {
 
 test.beforeEach(async ({ page }) => {
   let testnetWatcher = { run_id: null as string | null, cycle_id: null as string | null, symbol: null as 'BTCUSDT' | null, allow_mutations: false, phase: 'idle', health: 'idle', manager_running: false, coverage_observation_fresh: false, snapshot: null }
+  let paperState = { session_id: '11111111-1111-4111-8111-111111111111', started_at: null as number | null, entries_enabled: false, config: null as Record<string, unknown> | null, cash: '0', equity: '0', position: null, orders: [] as unknown[], fills: [] as unknown[], reason: 'Yapılandırılmadı.' }
+  const archivedItems: Array<Record<string, unknown>> = []
   await page.route('**/api/**', async (route) => {
     const requestUrl = route.request().url()
     if (requestUrl.includes('/api/testnet/session')) return route.fulfill({ json: { server_instance_id: 'e2e-server', control_token: 'e2e-token' } })
@@ -22,7 +24,14 @@ test.beforeEach(async ({ page }) => {
     }
     if (requestUrl.includes('/api/testnet/status')) return route.fulfill({ json: { mode: 'testnet', production_enabled: false, server_instance_id: 'e2e-server', observed_at_ms: Date.now(), ledger_status: 'ready', cycles: [{ cycle_id: 'e2e-cycle', symbol: 'BTCUSDT', state: 'ENTRY_SUBMITTED', stop_entry_requested: false, updated_at_ms: Date.now() }], watcher: testnetWatcher } })
     if (requestUrl.includes('/api/status')) return route.fulfill({ json: status })
-    if (requestUrl.includes('/api/paper')) return route.fulfill({ json: { entries_enabled: false, config: null, cash: '0', equity: '0', position: null, orders: [], fills: [], reason: 'Yapılandırılmadı.' } })
+    if (requestUrl.includes('/api/paper/archives?')) return route.fulfill({ json: { items: archivedItems, total: archivedItems.length } })
+    if (requestUrl.includes('/api/paper/archive')) {
+      const previous = paperState
+      archivedItems.unshift({ session_id: previous.session_id, started_at: previous.started_at, archived_at: Date.now(), config: previous.config, cash: previous.cash, equity: previous.equity, realized_pnl: '0', order_count: previous.orders.length, fill_count: previous.fills.length })
+      paperState = { session_id: '22222222-2222-4222-8222-222222222222', started_at: null, entries_enabled: false, config: null, cash: '0', equity: '0', position: null, orders: [], fills: [], reason: 'Yapılandırılmadı.' }
+      return route.fulfill({ json: paperState })
+    }
+    if (requestUrl.endsWith('/api/paper')) return route.fulfill({ json: paperState })
     if (requestUrl.includes('/api/symbols')) return route.fulfill({ json: { symbols: ['BTCUSDT', 'SOLUSDT'] } })
     if (requestUrl.includes('/api/market')) return route.fulfill({ json: {
       symbol: requestUrl.includes('SOLUSDT') ? 'SOLUSDT' : 'BTCUSDT', interval: '5m', source: 'Binance Global REST/WS',
@@ -87,4 +96,26 @@ test('Testnet koruma onayıyla izleyiciyi başlatır ve aynı çalışmayı durd
   await page.getByRole('button', { name: 'İzleyiciyi durdur' }).click()
   await stopRequest
   await expect(page.getByText('Durduruldu', { exact: true })).toBeVisible()
+})
+
+test('390px mobilde PAPER arşivi erişilebilir ve yeni boş forma döner', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Paper', exact: true }).first().click()
+
+  const currentState = {
+    session_id: '33333333-3333-4333-8333-333333333333', started_at: Date.now(), entries_enabled: false,
+    config: { venue: 'global', symbol: 'BTCUSDT', interval: '5m', strategy: 'pullback', capital: '1000' },
+    cash: '1000', equity: '1000', position: null, orders: [], fills: [], reason: 'Girişler durduruldu.',
+  }
+  await page.route('**/api/paper', (route) => route.fulfill({ json: currentState }), { times: 1 })
+  await page.reload()
+  await page.getByRole('button', { name: 'Paper', exact: true }).first().click()
+  await page.getByRole('checkbox', { name: /arşivlemek istediğimi onaylıyorum/ }).check()
+  await page.getByRole('button', { name: 'PAPER oturumunu arşivle' }).click()
+  await expect(page.getByRole('button', { name: 'PAPER oturumunu başlat' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Deney arşivi' })).toBeVisible()
+  const archiveBox = await page.locator('.archive-panel').boundingBox()
+  expect(archiveBox).not.toBeNull()
+  expect((archiveBox?.x ?? 0) + (archiveBox?.width ?? 0)).toBeLessThanOrEqual(390)
 })
