@@ -1,4 +1,4 @@
-# Durum — 2026-10-27
+# Durum — 2026-10-28
 
 Yerel kaynak gerçek `berkerden/codexalsat` clone'udur. Public depo kullanılır.
 PR #3 araştırma/paper sürümünü main’e taşıdı; issue #2 canlı öncesi kalan işleri izler.
@@ -183,3 +183,36 @@ bilinen açık yok. PostgreSQL ve son commit CI kanıtı ilgili PR'da kaydedilir
 ve 4 tarayıcı testini geçti. Güncel pip-audit taraması msgpack 1.2.2 için
 CVE-2026-114613 bildirdi; bağımlılık 1.2.3 düzeltme sürümüne sabitlendi.
 Son sürümün tarama ve CI sonucu ilgili PR'da kaydedilir.
+
+
+28 Ekim — ileri paper gözlem kaydı ve raporu
+
+PR #16 main'e birleştirildi (a29cda5); 98cefab için CI 40571089479
+601 backend, 22 arayüz ve 4 tarayıcı testini, iki güvenlik taramasını geçti.
+
+Paper işçisi artık yalnız ileriye dönük, oturuma bağlı gözlem özeti tutar.
+Güncel kotasyon/mum/saat/filtre değerlendirmesi ile yalnız kotasyonla pozisyon
+yönetimi ayrı sayılır. En fazla 10 saniye aralıklı sağlıklı örnekler arasında
+hesaplanan süre; geçen takvim süresi, gözlenmeyen aralıklar ve kesintilerden
+ayrıdır. Okuma süreyi artırmaz; eski oturumlardan gözlem üretilmez. Saat
+gerilemesi aynı aralığı iki kez saydırmaz. Durdurma, yeniden yetkilendirme,
+yeniden başlatma, kod değişimi ve geri yükleme süre zincirini keser.
+
+Ayar özeti ve kaynak kod kimliği, devralınan geçmiş ve karışık kod sürümleri
+raporlanır. Paper ekranı güncel ve arşivlenmiş raporu okuyabilir, yenileyebilir
+ve gösterilen raporu JSON indirebilir. Rapor, tüm oturum K/Z'sini gözlem
+penceresi getirisi diye sunmaz. Yedek şema 3 gözlem geçmişini taşır; şema 1/2
+uyumlu kalır. Geçersiz gözlem yedeği mevcut durumu değiştirmeden reddedilir.
+
+Astra/high sözleşmeyi ve ilk incelemeyi, Sol/high motorun ilk uygulamasını,
+Sol/medium arayüzün ilk uygulamasını yaptı. Kullanım sınırları sonrasında
+kalan düzeltmeler ve testler ana oturumda tamamlandı. Ayrı Astra/high son
+incelemesi hedefli testleri çalıştırdı; kapsam içinde açık P1/P2 yok.
+
+Yerel doğrulama: 457 backend testi başarılı, PostgreSQL servisi olmadığı için
+175 varyant atlandı; 27 arayüz testi ve 390px rapor/JSON indirme dahil
+5 tarayıcı akışı geçti. Lint, strict tip, derleme ve bağımlılık taramaları
+başarılı. PostgreSQL ve son commitin CI sonucu ilgili PR'da kaydedilir.
+Yalnız sentetik testler kullanıldı; gerçek hesap/borsa isteği veya yeni paper
+deneyi başlatılmadı. Bu teslim 30 günlük gözlemin tamamlandığını göstermez;
+işletim sistemi servisi/yetki yenileme kurmaz ve canlı kilidini açmaz.

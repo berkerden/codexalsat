@@ -37,6 +37,9 @@ kendiliğinden açmaz. Durdurmak için `Ctrl+C`; açık paper pozisyonları kay�
    varsayılır. Aynı oturumun risk ayarları sessizce değiştirilemez. Farklı deney
    için girişleri durdurun, pozisyonu kapatın ve oturumu geçmişiyle arşivleyin.
    Yeni deney ayrı başlatılır; arşivler Paper ekranından okunabilir.
+   İleri gözlem raporu, kaydedilen giriş değerlendirmesi ve pozisyon izleme
+   sürelerini ayrı gösterir; rapor yerel JSON dosyası olarak indirilebilir.
+   Geçmiş işlemlerden gözlem süresi üretilmez; rapor canlı kullanım onayı vermez.
 4. **Yeni girişleri durdur** mevcut pozisyonun çıkış yönetimini korur.
    **Bot pozisyonlarını kapat** sadece sanal bot pozisyonunu kapatır; bağlantı yoksa
    istek kalıcı olarak bekler. Hiçbir manuel borsa varlığına erişilmez.

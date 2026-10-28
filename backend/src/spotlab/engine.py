@@ -4,7 +4,10 @@ Every price is a simulated fill from a fresh observed book. Base/third-asset fee
 are deliberately not guessed: this simulator charges quote-asset fees only.
 """
 
+import hashlib
 import json
+import os
+import subprocess
 import time
 import uuid
 from collections.abc import Iterator
@@ -86,15 +89,86 @@ def empty_state() -> dict[str, Any]:
         "daily_loss": "0",
         "drawdown": "0",
         "realized_pnl": "0",
+        "observation": None,
     }
 
 
-LEGACY_STATE_KEYS = frozenset(empty_state()) - {"session_id", "started_at"}
+PRE_OBSERVATION_STATE_KEYS = frozenset(
+    {
+        "session_id",
+        "started_at",
+        "mode",
+        "entries_enabled",
+        "config",
+        "cash",
+        "equity",
+        "peak",
+        "day_start_equity",
+        "day",
+        "daily_trades",
+        "loss_streak",
+        "position",
+        "orders",
+        "fills",
+        "audit",
+        "last_signal_time",
+        "reason",
+        "expires_at",
+        "daily_loss",
+        "drawdown",
+        "realized_pnl",
+    }
+)
+LEGACY_STATE_KEYS = PRE_OBSERVATION_STATE_KEYS - {"session_id", "started_at"}
 STATE_KEYS = frozenset(empty_state())
+
+OBSERVATION_SCOPES = frozenset({"entry", "management"})
+OBSERVATION_STATUSES = frozenset({"healthy", "unhealthy"})
+OBSERVATION_REASONS = frozenset({"ok", "invalid_quote", "entry_data_unhealthy", "market_error"})
+OBSERVATION_COUNT_KEYS = frozenset({"attempts", "healthy_entry", "healthy_management", "unhealthy"})
+OBSERVATION_COVERAGE_KEYS = frozenset({"entry", "management"})
+OBSERVATION_INTERRUPTION_KEYS = frozenset(
+    {"restart", "stop", "restore", "code_change", "clock_regression"}
+)
+OBSERVATION_KEYS = frozenset(
+    {
+        "schema_version",
+        "config_sha256",
+        "first_observed_at",
+        "last_observed_at",
+        "first_code_identity",
+        "last_code_identity",
+        "mixed_code_identity",
+        "process_count",
+        "source_session_id",
+        "counts",
+        "coverage_ms",
+        "gap_count",
+        "max_gap_ms",
+        "interruptions",
+        "last_status",
+        "last_scope",
+        "last_reason",
+        "continuity",
+        "last_process_id",
+    }
+)
+OBSERVATION_CONTINUITY_KEYS = frozenset({"process_id", "at", "scope", "healthy"})
+SOURCE_FILES = (
+    "engine.py",
+    "main.py",
+    "contracts.py",
+    "finance.py",
+    "market.py",
+    "research.py",
+    "signals.py",
+)
 
 
 class PaperEngine:
     def __init__(self, database_url: str) -> None:
+        self._process_id = uuid.uuid4().hex
+        self._code_identity = self._source_identity()
         options: dict[str, Any] = {}
         if database_url.startswith("sqlite"):
             options["connect_args"] = {"check_same_thread": False, "timeout": 30}
@@ -125,10 +199,49 @@ class PaperEngine:
             legacy = "session_id" not in state
             state.setdefault("session_id", str(uuid.uuid4()))
             state.setdefault("started_at", self._legacy_started_at(state))
+            state.setdefault("observation", None)
             state["entries_enabled"] = False
             state["reason"] = "Başlangıç uzlaştırması: yeni girişler kapalı."
             if not legacy:
+                self._interrupt_observation(state, "restart")
                 self._audit(state, "restart", "Giriş yetkisi sıfırlandı; paper kayıtları korundu")
+
+    @staticmethod
+    def _source_identity() -> str:
+        root = os.path.dirname(__file__)
+        digest = hashlib.sha256()
+        for name in SOURCE_FILES:
+            path = os.path.join(root, name)
+            digest.update(name.encode("utf-8"))
+            try:
+                with open(path, "rb") as source:
+                    digest.update(source.read())
+            except OSError:
+                digest.update(b"<unavailable>")
+        try:
+            commit = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=2,
+            ).strip()
+        except (OSError, subprocess.SubprocessError):
+            commit = "unavailable"
+        return f"source:{digest.hexdigest()};commit:{commit}"
+
+    @staticmethod
+    def _config_sha256(config: dict[str, Any]) -> str:
+        encoded = json.dumps(config, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _interrupt_observation(state: dict[str, Any], event: str) -> None:
+        observation = state.get("observation")
+        if observation is None:
+            return
+        observation["interruptions"][event] += 1
+        observation["continuity"] = None
 
     @staticmethod
     def _legacy_started_at(state: dict[str, Any]) -> int | None:
@@ -173,7 +286,10 @@ class PaperEngine:
 
     @staticmethod
     def _public_state(state: dict[str, Any]) -> dict[str, Any]:
-        state = dict(state)
+        state = json.loads(json.dumps(state))
+        if state.get("observation") is not None:
+            state["observation"].pop("continuity", None)
+            state["observation"].pop("last_process_id", None)
         state["simulation"] = True
         state["fee_assumption"] = "Komisyon kotasyon varlığında; kullanıcının paper varsayımı."
         state["daily_timezone"] = "UTC"
@@ -233,6 +349,8 @@ class PaperEngine:
                     "reason": "Sanal işlem açık; gerçek piyasa verisi bekleniyor.",
                 }
             )
+            if state.get("observation") is not None:
+                state["observation"]["continuity"] = None
             self._audit(state, "paper_start", "Süreli paper giriş yetkisi etkinleştirildi")
             result = self._capture(state)
         return result
@@ -247,6 +365,31 @@ class PaperEngine:
             self._expect_session(state, expected_session_id)
             state["entries_enabled"] = False
             state["reason"] = reason
+            self._interrupt_observation(state, "stop")
+            self._audit(state, "stop_entries", reason)
+            result = self._capture(state)
+        return result
+
+    def record_worker_failure(
+        self,
+        scope: str,
+        reason: str = "Veri bağlantısı/kalitesi bozuldu; girişler durduruldu.",
+        *,
+        expected_session_id: str,
+        now: int | None = None,
+    ) -> dict[str, Any]:
+        """Atomically record a worker failure and revoke new-entry authority."""
+        if scope not in OBSERVATION_SCOPES:
+            raise ValueError("Paper gözlem kapsamı geçersiz")
+        at = millis() if now is None else now
+        with self.transaction() as (_, state):
+            self._expect_session(state, expected_session_id)
+            if not state["config"]:
+                raise PaperConflictError("Yapılandırılmamış paper oturumu gözlemlenemez.")
+            state["entries_enabled"] = False
+            state["reason"] = reason
+            self._record_observation(state, at, scope, False, "market_error")
+            self._interrupt_observation(state, "stop")
             self._audit(state, "stop_entries", reason)
             result = self._capture(state)
         return result
@@ -258,6 +401,7 @@ class PaperEngine:
             state["entries_enabled"] = False
             if state["position"]:
                 state["position"]["exit_reason"] = "manual_close"
+            self._interrupt_observation(state, "stop")
             state["reason"] = "Paper kapatma isteği kaydedildi; güncel kotasyon bekleniyor."
             self._audit(state, "request_close", state["reason"])
             result = self._capture(state)
@@ -293,7 +437,10 @@ class PaperEngine:
         now: int | None = None,
         force_close: bool = False,
         expected_session_id: str | None = None,
+        observation_scope: str | None = None,
     ) -> dict[str, Any]:
+        if observation_scope is not None and observation_scope not in OBSERVATION_SCOPES:
+            raise ValueError("Paper gözlem kapsamı geçersiz")
         at = millis() if now is None else now
         with self.transaction() as (_, state):
             self._expect_session(state, expected_session_id)
@@ -301,7 +448,14 @@ class PaperEngine:
                 result = self._capture(state)
             else:
                 cfg = PaperConfig.model_validate(state["config"])
-                if not self._valid_quote(quote, at, cfg.symbol):
+                valid_quote = self._valid_quote(quote, at, cfg.symbol)
+                valid_filters = (
+                    step.is_finite() and step > 0 and min_notional.is_finite() and min_notional >= 0
+                )
+                current_candle = (
+                    candle_time > 0 and 0 <= at - candle_time <= INTERVAL_MS[cfg.interval] + 5000
+                )
+                if not valid_quote:
                     state["entries_enabled"] = False
                     state["reason"] = (
                         "Eski veya geçersiz veri: girişler durdu; çıkış güncel fiyat bekliyor."
@@ -315,12 +469,124 @@ class PaperEngine:
                         candle_time,
                         step,
                         min_notional,
-                        healthy,
+                        healthy and (observation_scope != "entry" or valid_filters),
                         at,
                         force_close,
                     )
+                if observation_scope is not None:
+                    observation_healthy = valid_quote
+                    observation_reason = "ok" if valid_quote else "invalid_quote"
+                    if (
+                        valid_quote
+                        and observation_scope == "entry"
+                        and (not healthy or not valid_filters or not current_candle)
+                    ):
+                        observation_healthy = False
+                        observation_reason = "entry_data_unhealthy"
+                    self._record_observation(
+                        state,
+                        at,
+                        observation_scope,
+                        observation_healthy,
+                        observation_reason,
+                    )
                 result = self._capture(state)
-        return result
+            return result
+
+    def _record_observation(
+        self,
+        state: dict[str, Any],
+        at: int,
+        scope: str,
+        healthy: bool,
+        reason: str,
+    ) -> None:
+        if type(at) is not int or at < 0:
+            raise ValueError("Paper gözlem zamanı geçersiz")
+        if scope not in OBSERVATION_SCOPES or reason not in OBSERVATION_REASONS:
+            raise ValueError("Paper gözlem sınıflandırması geçersiz")
+        status = "healthy" if healthy else "unhealthy"
+        observation = state.get("observation")
+        if observation is None:
+            observation = {
+                "schema_version": 1,
+                "config_sha256": self._config_sha256(state["config"]),
+                "first_observed_at": at,
+                "last_observed_at": at,
+                "first_code_identity": self._code_identity,
+                "last_code_identity": self._code_identity,
+                "mixed_code_identity": False,
+                "process_count": 1,
+                "source_session_id": None,
+                "counts": {
+                    "attempts": 0,
+                    "healthy_entry": 0,
+                    "healthy_management": 0,
+                    "unhealthy": 0,
+                },
+                "coverage_ms": {"entry": 0, "management": 0},
+                "gap_count": 0,
+                "max_gap_ms": 0,
+                "interruptions": {
+                    "restart": 0,
+                    "stop": 0,
+                    "restore": 0,
+                    "code_change": 0,
+                    "clock_regression": 0,
+                },
+                "last_status": status,
+                "last_scope": scope,
+                "last_reason": reason,
+                "continuity": None,
+                "last_process_id": self._process_id,
+            }
+            state["observation"] = observation
+        elif observation["last_process_id"] != self._process_id:
+            observation["process_count"] += 1
+            observation["last_process_id"] = self._process_id
+            observation["continuity"] = None
+
+        counts = observation["counts"]
+        counts["attempts"] += 1
+        counts[f"healthy_{scope}" if healthy else "unhealthy"] += 1
+        observation["last_status"] = status
+        observation["last_scope"] = scope
+        observation["last_reason"] = reason
+
+        if observation["last_code_identity"] != self._code_identity:
+            observation["last_code_identity"] = self._code_identity
+            observation["mixed_code_identity"] = True
+            observation["interruptions"]["code_change"] += 1
+            observation["continuity"] = None
+
+        high_water = observation["last_observed_at"]
+        if at <= high_water and counts["attempts"] > 1:
+            observation["interruptions"]["clock_regression"] += 1
+            observation["continuity"] = None
+            return
+
+        delta_from_high_water = at - high_water
+        if counts["attempts"] > 1 and delta_from_high_water > 10_000:
+            observation["gap_count"] += 1
+            observation["max_gap_ms"] = max(observation["max_gap_ms"], delta_from_high_water)
+        observation["last_observed_at"] = max(high_water, at)
+        previous = observation["continuity"]
+        if (
+            healthy
+            and previous is not None
+            and previous["healthy"] is True
+            and previous["scope"] == scope
+            and previous["process_id"] == self._process_id
+        ):
+            delta = at - previous["at"]
+            if 0 < delta <= 10_000:
+                observation["coverage_ms"][scope] += delta
+        observation["continuity"] = {
+            "process_id": self._process_id,
+            "at": at,
+            "scope": scope,
+            "healthy": healthy,
+        }
 
     def _mark(self, state: dict[str, Any], cfg: PaperConfig, bid: Decimal, at: int) -> None:
         equity = D(state["cash"])
@@ -522,13 +788,27 @@ class PaperEngine:
         )
 
     @classmethod
-    def _validate_state(cls, candidate: Any, *, legacy: bool = False) -> dict[str, Any]:
+    def _validate_state(
+        cls,
+        candidate: Any,
+        *,
+        legacy: bool = False,
+        pre_observation: bool = False,
+    ) -> dict[str, Any]:
         if not isinstance(candidate, dict):
             raise ValueError("Yedek durumu geçersiz")
-        required = LEGACY_STATE_KEYS if legacy else STATE_KEYS
+        required = (
+            LEGACY_STATE_KEYS
+            if legacy
+            else PRE_OBSERVATION_STATE_KEYS
+            if pre_observation
+            else STATE_KEYS
+        )
         if set(candidate) != required:
             raise ValueError("Yedek şeması geçersiz")
         state = dict(candidate)
+        if legacy or pre_observation:
+            state["observation"] = None
         if not legacy:
             try:
                 parsed = uuid.UUID(state["session_id"])
@@ -592,6 +872,11 @@ class PaperEngine:
                 raise ValueError("Yapılandırılmış paper durumu tutarsız")
         elif state["position"] is not None or state["entries_enabled"]:
             raise ValueError("Yapılandırmasız pozisyon/yetki geri yüklenemez")
+        observation = state["observation"]
+        if observation is not None:
+            if cfg is None:
+                raise ValueError("Yapılandırmasız paper gözlemi olamaz")
+            cls._validate_observation(observation, cls._config_sha256(state["config"]))
         for name in ("orders", "fills", "audit"):
             if not isinstance(state[name], list):
                 raise ValueError("Paper geçmişi geçersiz")
@@ -707,14 +992,121 @@ class PaperEngine:
         return state
 
     @classmethod
-    def _validate_archive(cls, candidate: Any) -> tuple[str, int, dict[str, Any]]:
+    def _validate_observation(cls, candidate: Any, config_sha256: str) -> None:
+        if not isinstance(candidate, dict) or set(candidate) != OBSERVATION_KEYS:
+            raise ValueError("Paper gözlem şeması geçersiz")
+        if (
+            type(candidate["schema_version"]) is not int
+            or candidate["schema_version"] != 1
+            or candidate["config_sha256"] != config_sha256
+        ):
+            raise ValueError("Paper gözlem yapılandırması geçersiz")
+
+        def integer(value: Any, *, positive: bool = False) -> None:
+            if type(value) is not int or value < (1 if positive else 0):
+                raise ValueError("Paper gözlem sayacı/zamanı geçersiz")
+
+        integer(candidate["first_observed_at"])
+        integer(candidate["last_observed_at"])
+        if candidate["last_observed_at"] < candidate["first_observed_at"]:
+            raise ValueError("Paper gözlem zaman aralığı geçersiz")
+        for key in ("first_code_identity", "last_code_identity"):
+            if not isinstance(candidate[key], str) or not candidate[key]:
+                raise ValueError("Paper kaynak kimliği geçersiz")
+        if type(candidate["mixed_code_identity"]) is not bool:
+            raise ValueError("Paper kaynak karışımı geçersiz")
+        if (
+            not candidate["mixed_code_identity"]
+            and candidate["first_code_identity"] != candidate["last_code_identity"]
+        ):
+            raise ValueError("Paper kaynak kimliği tutarsız")
+        integer(candidate["process_count"], positive=True)
+        if not isinstance(candidate["last_process_id"], str) or not candidate["last_process_id"]:
+            raise ValueError("Paper gözlem süreç kimliği geçersiz")
+        source_session_id = candidate["source_session_id"]
+        if source_session_id is not None:
+            try:
+                parsed = uuid.UUID(source_session_id)
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ValueError("Paper gözlem kaynak oturumu geçersiz") from exc
+            if str(parsed) != source_session_id:
+                raise ValueError("Paper gözlem kaynak oturumu geçersiz")
+
+        counts = candidate["counts"]
+        if not isinstance(counts, dict) or set(counts) != OBSERVATION_COUNT_KEYS:
+            raise ValueError("Paper gözlem sayaçları geçersiz")
+        for value in counts.values():
+            integer(value)
+        if (
+            counts["attempts"]
+            != (counts["healthy_entry"] + counts["healthy_management"] + counts["unhealthy"])
+            or counts["attempts"] < 1
+        ):
+            raise ValueError("Paper gözlem sayaçları tutarsız")
+        if candidate["process_count"] > counts["attempts"]:
+            raise ValueError("Paper gözlem süreç sayacı tutarsız")
+
+        coverage = candidate["coverage_ms"]
+        if not isinstance(coverage, dict) or set(coverage) != OBSERVATION_COVERAGE_KEYS:
+            raise ValueError("Paper gözlem kapsam süresi geçersiz")
+        for value in coverage.values():
+            integer(value)
+        span = candidate["last_observed_at"] - candidate["first_observed_at"]
+        if (
+            sum(coverage.values()) > span
+            or coverage["entry"] > max(0, counts["healthy_entry"] - 1) * 10_000
+            or coverage["management"] > max(0, counts["healthy_management"] - 1) * 10_000
+        ):
+            raise ValueError("Paper gözlem kapsam süresi tutarsız")
+        integer(candidate["gap_count"])
+        integer(candidate["max_gap_ms"])
+        if (candidate["gap_count"] == 0) != (candidate["max_gap_ms"] == 0) or (
+            candidate["gap_count"] > 0 and candidate["max_gap_ms"] <= 10_000
+        ):
+            raise ValueError("Paper gözlem boşluk özeti tutarsız")
+
+        interruptions = candidate["interruptions"]
+        if (
+            not isinstance(interruptions, dict)
+            or set(interruptions) != OBSERVATION_INTERRUPTION_KEYS
+        ):
+            raise ValueError("Paper gözlem kesinti sayaçları geçersiz")
+        for value in interruptions.values():
+            integer(value)
+        if candidate["last_status"] not in OBSERVATION_STATUSES:
+            raise ValueError("Paper gözlem durumu geçersiz")
+        if candidate["last_scope"] not in OBSERVATION_SCOPES:
+            raise ValueError("Paper gözlem kapsamı geçersiz")
+        if candidate["last_reason"] not in OBSERVATION_REASONS:
+            raise ValueError("Paper gözlem nedeni geçersiz")
+        if (candidate["last_status"] == "healthy") != (candidate["last_reason"] == "ok"):
+            raise ValueError("Paper gözlem durumu/nedeni tutarsız")
+
+        continuity = candidate["continuity"]
+        if continuity is not None:
+            if not isinstance(continuity, dict) or set(continuity) != OBSERVATION_CONTINUITY_KEYS:
+                raise ValueError("Paper gözlem sürekliliği geçersiz")
+            if not isinstance(continuity["process_id"], str) or not continuity["process_id"]:
+                raise ValueError("Paper gözlem süreç kimliği geçersiz")
+            integer(continuity["at"])
+            if continuity["at"] != candidate["last_observed_at"]:
+                raise ValueError("Paper gözlem süreklilik zamanı geçersiz")
+            if continuity["scope"] not in OBSERVATION_SCOPES:
+                raise ValueError("Paper gözlem süreklilik kapsamı geçersiz")
+            if type(continuity["healthy"]) is not bool:
+                raise ValueError("Paper gözlem süreklilik sağlığı geçersiz")
+
+    @classmethod
+    def _validate_archive(
+        cls, candidate: Any, *, pre_observation: bool = False
+    ) -> tuple[str, int, dict[str, Any]]:
         if not isinstance(candidate, dict) or set(candidate) != {
             "session_id",
             "archived_at",
             "state",
         }:
             raise ValueError("Arşiv yedeği geçersiz")
-        state = cls._validate_state(candidate["state"])
+        state = cls._validate_state(candidate["state"], pre_observation=pre_observation)
         session_id = candidate["session_id"]
         archived_at = candidate["archived_at"]
         if session_id != state["session_id"]:
@@ -820,6 +1212,81 @@ class PaperEngine:
             "state": self._public_state(json.loads(row["payload"])),
         }
 
+    @staticmethod
+    def _observation_report(state: dict[str, Any], *, archived: bool, as_of: int) -> dict[str, Any]:
+        observation = state.get("observation")
+        public_observation = None
+        if observation is not None:
+            public_observation = json.loads(json.dumps(observation))
+            public_observation.pop("continuity", None)
+            public_observation.pop("last_process_id", None)
+        started_at = state.get("started_at")
+        limitations = [
+            "İşçi gözlemleri bağımsız strateji örnekleri veya işlemler değildir.",
+            "Giriş değerlendirmesi ve pozisyon yönetimi farklı kapsamlardır.",
+            "Kapsama yalnız en fazla 10 saniye aralıklı sağlıklı örnekler arasından hesaplanır; "
+            "kesintisiz hizmet garantisi değildir.",
+            "Sonuçlar bütün paper oturumuna aittir; gözlemden önceki işlemleri içerebilir.",
+        ]
+        if observation is not None and observation["source_session_id"] is not None:
+            limitations.append(
+                "Gözlem geçmişi yedekten devralındı; süre zinciri kesildi. "
+                f"Kaynak oturum: {observation['source_session_id']}"
+            )
+        if observation is not None and observation["mixed_code_identity"]:
+            limitations.append(
+                "Gözlem geçmişinde kod kimliği değişti; tek sabit sürüm deneyi değildir."
+            )
+        if observation is not None and as_of < observation["last_observed_at"]:
+            limitations.append(
+                "Rapor saati son kayıttan geride; zaman aralığı değerlendirilmemelidir."
+            )
+        evidence_status = (
+            "no_observations" if observation is None else "archived" if archived else "collecting"
+        )
+        return {
+            "schema_version": 1,
+            "session_id": state["session_id"],
+            "archived": archived,
+            "as_of": as_of,
+            "simulation": True,
+            "live_eligible": False,
+            "evidence_status": evidence_status,
+            "started_at": started_at,
+            "calendar_elapsed_ms": max(0, as_of - started_at) if started_at is not None else 0,
+            "observation_span_ms": (
+                max(
+                    0,
+                    max(as_of, observation["last_observed_at"]) - observation["first_observed_at"],
+                )
+                if observation is not None
+                else 0
+            ),
+            "observation": public_observation,
+            "results": {
+                "scope": "entire_paper_session",
+                "cash": state["cash"],
+                "equity": state["equity"],
+                "realized_pnl": state["realized_pnl"],
+                "fill_count": len(state["fills"]),
+                "position_open": state["position"] is not None,
+            },
+            "limitations": limitations,
+        }
+
+    def observation_report(
+        self, expected_session_id: str, *, now: int | None = None
+    ) -> dict[str, Any]:
+        state = self.snapshot()
+        self._expect_session(state, expected_session_id)
+        return self._observation_report(
+            state, archived=False, as_of=millis() if now is None else now
+        )
+
+    def archive_observation_report(self, session_id: str) -> dict[str, Any]:
+        detail = self.archive_detail(session_id)
+        return self._observation_report(detail["state"], archived=True, as_of=detail["archived_at"])
+
     def backup(self, destination: str) -> None:
         # Portable transactional logical backup, no credentials in the payload.
         from pathlib import Path
@@ -835,12 +1302,15 @@ class PaperEngine:
                 {
                     "session_id": row["session_id"],
                     "archived_at": row["archived_at"],
-                    "state": json.loads(row["payload"]),
+                    "state": {
+                        **json.loads(row["payload"]),
+                        "observation": json.loads(row["payload"]).get("observation"),
+                    },
                 }
                 for row in rows
             ]
             Path(destination).write_text(
-                json.dumps({"schema": 2, "current": state, "archives": archives}),
+                json.dumps({"schema": 3, "current": state, "archives": archives}),
                 encoding="utf-8",
             )
 
@@ -863,6 +1333,24 @@ class PaperEngine:
             "current",
             "archives",
         }:
+            restored = self._validate_state(payload["current"], pre_observation=True)
+            original_session_id = restored["session_id"]
+            if not isinstance(payload["archives"], list):
+                raise ValueError("Arşiv listesi geçersiz")
+            archives = [
+                self._validate_archive(item, pre_observation=True) for item in payload["archives"]
+            ]
+            archive_ids = [item[0] for item in archives]
+            if len(archive_ids) != len(set(archive_ids)):
+                raise ValueError("Yinelenen arşiv oturum kimliği")
+            if original_session_id in set(archive_ids):
+                raise ValueError("Etkin oturum arşiv geçmişinde yinelenemez")
+            restored["session_id"] = str(uuid.uuid4())
+        elif payload.get("schema") == 3 and set(payload) == {
+            "schema",
+            "current",
+            "archives",
+        }:
             restored = self._validate_state(payload["current"])
             original_session_id = restored["session_id"]
             if not isinstance(payload["archives"], list):
@@ -878,6 +1366,12 @@ class PaperEngine:
             raise ValueError("Yedek şeması geçersiz")
         restored["entries_enabled"] = False
         restored["reason"] = "Yedek yüklendi; girişler kapalı, uzlaştırma gerekli."
+        if restored["observation"] is not None:
+            observation = restored["observation"]
+            if observation["source_session_id"] is None:
+                observation["source_session_id"] = original_session_id
+            observation["interruptions"]["restore"] += 1
+            observation["continuity"] = None
         identity_message = (
             f"Yedek yüklendi; önceki oturum kimliği {original_session_id}; "
             "giriş yetkisi geri yüklenmedi"

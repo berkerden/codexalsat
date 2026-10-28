@@ -392,6 +392,12 @@ def create_app(database_url: str | None = None, *, run_worker: bool = True) -> F
     async def paper() -> Any:
         return app.state.engine.snapshot()
 
+    @app.get("/api/paper/observation")
+    async def paper_observation(
+        expected_session_id: str = Query(min_length=1, max_length=64),
+    ) -> Any:
+        return app.state.engine.observation_report(expected_session_id)
+
     @app.post("/api/paper/start")
     async def paper_start(body: PaperStartInput) -> Any:
         config = PaperConfig.model_validate(body.model_dump(exclude={"expected_session_id"}))
@@ -448,6 +454,13 @@ def create_app(database_url: str | None = None, *, run_worker: bool = True) -> F
         except PaperArchiveNotFoundError as exc:
             raise HTTPException(404, str(exc)) from exc
 
+    @app.get("/api/paper/archives/{session_id}/observation")
+    async def paper_archive_observation(session_id: str) -> Any:
+        try:
+            return app.state.engine.archive_observation_report(session_id)
+        except PaperArchiveNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
     @app.post("/api/live/activate")
     async def live_activate() -> None:
         raise HTTPException(409, {"message": "Canlı işlem kilitli", "blockers": LIVE_BLOCKERS})
@@ -498,6 +511,7 @@ async def paper_cycle(app: FastAPI) -> None:
         return
     expected_session_id = state["session_id"]
     cfg = PaperConfig.model_validate(state["config"])
+    observation_scope = "management" if state["position"] else "entry"
     try:
         quote = await current_quote(app, cfg.symbol)
         if state["position"]:
@@ -508,6 +522,7 @@ async def paper_cycle(app: FastAPI) -> None:
                 step=D("0.00000001"),
                 min_notional=D(0),
                 expected_session_id=expected_session_id,
+                observation_scope="management",
             )
             app.state.worker_error = None
             return
@@ -517,7 +532,10 @@ async def paper_cycle(app: FastAPI) -> None:
             app.state.market.latest(cfg.symbol, cfg.interval),
         )
         quality = validate_candles(candles, cfg.interval, now_ms=millis())
-        step, minimum = filters(info)
+        try:
+            step, minimum = filters(info)
+        except ValueError:
+            step, minimum = D(0), D(-1)
         signals = strategy_signal(candles, cfg.strategy)
         # Fetch again after slower entry prerequisites; no fill at an old pre-signal quote.
         quote = await current_quote(app, cfg.symbol)
@@ -529,13 +547,15 @@ async def paper_cycle(app: FastAPI) -> None:
             min_notional=minimum,
             healthy=quality.ok and clock.synchronized,
             expected_session_id=expected_session_id,
+            observation_scope="entry",
         )
         app.state.worker_error = None
     except PaperConflictError:
         return
     except (MarketDataError, OSError, ValueError, TimeoutError):
         try:
-            app.state.engine.stop(
+            app.state.engine.record_worker_failure(
+                observation_scope,
                 "Veri bağlantısı/kalitesi bozuldu; girişler durduruldu.",
                 expected_session_id=expected_session_id,
             )

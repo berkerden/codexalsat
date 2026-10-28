@@ -40,6 +40,40 @@ Bu dizinin ayrı sanal bakiyesi ve piyasa arşivi olur. Önceki dizine dönüld�
 girişler kapalı başlar. Paper arşivleme Testnet defterini etkilemez; gerçek hesap
 sıfırlaması veya canlı risk sınırını aşma yolu değildir.
 
+## İleri paper gözlem raporu
+
+Paper bölümündeki gözlem raporu yalnız bu kayıt özelliğiyle çalışan motorun
+ileriye dönük gözlemlerini kapsar. Eski oturum başlangıcı, geçmiş dolumlar veya
+uygulamanın kurulduğu tarih gözlem süresine çevrilmez. Aynı ayarlarla deney
+yürütmek için seçilmiş kod sürümünü ve oturum ayarlarını sabit tutun.
+
+1. Paper ayarlarını inceleyip oturumu açıkça başlatın. Raporu açmak veya
+   indirmek giriş yetkisi vermez.
+2. Gözlem raporunda kaydın başlangıcını, son kaydı ve süreleri kontrol edin.
+   Strateji verilerinin kontrol edildiği giriş değerlendirmeleri ile yalnız
+   kotasyonla yapılan açık pozisyon yönetimi ayrı gösterilir.
+3. Raporu JSON olarak yerel bilgisayarınıza indirebilirsiniz. Arşivlenen
+   deneyin raporu arşiv ayrıntısından okunabilir. Rapor kişisel deney verisidir;
+   public GitHub deposuna yüklemeyin.
+4. Süreli giriş yetkisi bittiğinde ve açık pozisyon kalmadığında motor yeni
+   gözlem yapmaz. Aynı ayarlarla yeniden yetkilendirme kullanıcı eylemidir;
+   bu paket yetkiyi otomatik yenilemez.
+
+Gözlem süresi, sağlıklı ve yakın iki örnek arasındaki aralıklardan hesaplanır;
+kesintisiz izleme garantisi değildir. Son örnekten sonra geçen zaman, bağlantı
+kesintisi, bilgisayar uykusu ve durdurulmuş dönemler sağlıklı süreye eklenmez.
+Tekrarlı mum sorguları bağımsız işlem veya bağımsız araştırma örneği sayılmaz.
+Yeniden başlatma ve geri yükleme süre zincirini keser; kod değişiklikleri ve
+geri yüklenen geçmiş raporda belirtilir. Önceki gözlemler silinerek kesintisiz
+bir deney görüntüsü oluşturulmaz.
+
+Oturumun toplam sanal K/Z'si kayıt özelliğinden önceki işlemleri de içerebilir;
+gözlem penceresine ait getiri diye yorumlanmaz. Raporun 30 gün açık kalması
+veya birkaç kârlı işlem canlı uygunluğu sağlamaz. En az 30 takvim günlük ileri
+gözlem hedefi, kapsama ve kesintiler, yeterli bağımsız işlem, maliyet stresi ve
+ekonomik avantaj ayrıca değerlendirilir. Canlı kilidi bu raporla açılmaz.
+Bu paket arka plan işletim sistemi servisi veya otomatik bildirim kurmaz.
+
 ## Yedek ve geri yükleme
 
 Önce panelden yeni girişleri durdurun; ardından `Ctrl+C` ile backend'i kapatın.
@@ -54,10 +88,11 @@ Geri yükleme öncesi mevcut dosyayı farklı bir adla koruyun. Yedeği `data/pa
 konumuna kopyalayın ve backend'i başlatın. Başlangıç tüm giriş yetkisini sıfırlar;
 açık pozisyonlar, dolumlar, nakit ve arşiv tablosu korunur. `test_restore_verified_and_does_not_restore_authorization`
 ve yeniden başlatma testleri mantıksal yedek geri yükleme değişmezlerini doğrular.
-Programatik `PaperEngine.backup` mantıksal yedeğinin sürüm 2 biçimi mevcut
+Programatik `PaperEngine.backup` mantıksal yedeğinin sürüm 3 biçimi mevcut
 oturumu ve bütün arşivleri aynı işlemden okur. `restore` yalnız henüz
 yapılandırılmamış ve arşivsiz hedefe uygulanabilir; mevcut deney veya arşiv
-üzerine yazmaz. Eski sürüm 1 yedekleri de boş hedefe yüklenebilir. Geri yükleme
+üzerine yazmaz. Eski sürüm 1 ve 2 yedekleri de boş hedefe yüklenebilir; eski
+biçimden gözlem kanıtı üretilmez. Geri yükleme
 aktif oturuma yeni kimlik verir, geçmiş arşiv kimliklerini korur ve girişleri
 kapalı bırakır. Panelde geri yükleme veya arşiv silme yolu bulunmaz.
 
