@@ -126,6 +126,62 @@ export interface PaperArchiveDetail {
   state: PaperState
 }
 
+export interface PaperObservationCounts {
+  attempts: number
+  healthy_entry: number
+  healthy_management: number
+  unhealthy: number
+}
+
+export interface PaperObservationSummary {
+  schema_version: number
+  config_sha256: string
+  first_observed_at: number
+  last_observed_at: number
+  first_code_identity: string
+  last_code_identity: string
+  mixed_code_identity: boolean
+  process_count: number
+  source_session_id: string | null
+  counts: PaperObservationCounts
+  coverage_ms: { entry: number; management: number }
+  gap_count: number
+  max_gap_ms: number
+  interruptions: {
+    restart: number
+    stop: number
+    restore: number
+    code_change: number
+    clock_regression: number
+  }
+  last_status: string
+  last_scope: string
+  last_reason: string | null
+}
+
+export interface PaperObservationReport {
+  schema_version: 1
+  session_id: string
+  archived: boolean
+  as_of: number
+  simulation: true
+  live_eligible: false
+  evidence_status: 'no_observations' | 'collecting' | 'archived'
+  started_at: number | null
+  calendar_elapsed_ms: number
+  observation_span_ms: number
+  observation: PaperObservationSummary | null
+  results: {
+    scope: 'entire_paper_session'
+    cash: string
+    equity: string
+    realized_pnl: string
+    fill_count: number
+    position_open: boolean
+  }
+  limitations: string[]
+}
+
 export interface ApiErrorBody {
   detail?: string | { message?: string; blockers?: string[] } | unknown[]
   message?: string

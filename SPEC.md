@@ -38,6 +38,10 @@ Para ve emir miktarlarında float yok. Gözlem/durum/işlem kayıtları Git dı�
   yeni kimlikli, yapılandırılmamış ve girişleri kapalı paper durumunu döndürür.
 - `GET /api/paper/archives?limit=20&offset=0`: sayfalı salt okunur özet ve toplam.
 - `GET /api/paper/archives/{session_id}`: değişmez arşiv durumu ve arşiv zamanı.
+- `GET /api/paper/observation?expected_session_id=...`: oturum kimliğiyle korunan,
+  salt okunur ileri gözlem raporu; uyuşmazlıkta 409.
+- `GET /api/paper/archives/{session_id}/observation`: arşiv anında dondurulmuş
+  deneyin ileri gözlem raporu; bulunamayan arşiv için 404.
 - Paper durumu boşken de `session_id` taşır; stop/close gövdeleri de
   `expected_session_id` ister. Oturum uyuşmazlığı 409 ile reddedilir.
 - `POST /api/live/activate`: değerlendirme engelleri bitmeden reddedilir.
@@ -115,9 +119,20 @@ penceresi karar zamanından önce bitmeli; örnekler örtüşmemeli. Benzerlik o
     Mantıksal yedek mevcut durumla tüm arşivleri tutarlı okur; geri yükleme
     yalnız boş hedefe yapılır, giriş yetkisi geri yüklenmez.
 
+16. İleri gözlem yalnız açıkça işaretlenen paper işçi denemelerinden kaydedilir;
+    durum okumak, oturum başlatmak veya elle kapatmak kanıt oluşturmaz. Giriş
+    değerlendirmesinde kotasyon, kapanmış güncel mum, saat ve filtre kontrolleri
+    gerekir. Pozisyon yönetiminde yalnız kotasyon kontrolü ayrı sınıfta tutulur.
+    Yakın sağlıklı örnekler arasındaki süreler tahminidir; süreç kesintisi, durdurma,
+    saat gerilemesi, kod değişikliği ve geri yükleme süre zincirini keser.
+    Eski veriden geriye dönük kayıt üretilmez. Ayar ve kod kimliği raporlanır;
+    geçmişten devralınan veya değişmiş kodla toplanan kanıt tek sabit deney diye
+    sunulmaz. Rapor canlı uygunluğu veya ekonomik avantaj onayı vermez.
+
 ## Aşama kabulü ve operasyon
 
-A0: gerçek GitHub deposu, ilk push, CI, secret taraması. Repo/merge seçimi bekleniyor.
+A0: gerçek GitHub deposu, ilk push, CI, secret taraması. Public depo ve CI geçen
+PR'ları birleştirme seçimi kullanıcı tarafından onaylandı.
 A1: bu sözleşme ve bağımsız beklenen sonuçlu test senaryoları.
 A2: sayfalama/artımlı Parquet, kalite, REST/WS kesinti/limit testi ve gerçek veri kanıtı.
 A3: sızıntısız aday seçimi, tekrar üretim, stres/örneklem dışı rapor; avantaj şart değil.

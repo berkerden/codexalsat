@@ -335,3 +335,28 @@ bilinen açık yok. PostgreSQL ve son commit CI kanıtı ilgili PR'da kaydedilir
 ve 4 tarayıcı testini geçti. Güncel pip-audit taraması msgpack 1.2.2 için
 CVE-2026-114613 bildirdi; bağımlılık 1.2.3 düzeltme sürümüne sabitlendi.
 Son sürümün tarama ve CI sonucu ilgili PR'da kaydedilir.
+# 28 Ekim 2026 — ileri paper gözlem raporu
+
+Kapsam: oturuma bağlı ileri gözlem kaydı, süre hesabı, kod/ayar kimliği,
+şema 3 yedek uyumu ve salt okunur rapor/indirme arayüzü.
+
+Astra/high tasarım ve ilk incelemesi; yalnız kotasyonla pozisyon yönetiminin
+tam giriş verisi kanıtı sayılmamasını, sağlıksız/saat gerilemesi/kesinti
+aralıklarının kapsamdan dışlanmasını ve eski kayıtların geriye dönük
+doldurulmamasını şart koştu. Sol/high ve Sol/medium ilk uygulamaları sonrası
+kullanım sınırı nedeniyle ana oturum devam etti. Süreç bilgisi işlem içinde
+kalıcılaştırıldı; manuel kapatma ve yeniden yetkilendirme zinciri kesiyor;
+boş/eski mumlar sinyal yokken de sağlıklı giriş gözlemi sayılmıyor.
+
+Ayrı Astra/high son incelemesi gerçek diff ve hedefli ileri gözlem, arşiv ve
+gecikmiş oturum testlerini çalıştırdı; kapsam içinde açık P1/P2 bulunmadı.
+İşlem ve gözlem beraber geri alınıyor; okumalar yeni kanıt üretmiyor; arşiv
+raporu sabit; geri yükleme eski kanıtı kaynak kimliğiyle koruyup zinciri
+kesiyor. Eski şema 1/2 uyumu ve geçersiz gözlem yedeğinde değişmezlik sınandı.
+
+Yerel tam paket: 457 başarılı / 175 PostgreSQL varyantı atlandı; 27 arayüz
+testi, 5 tarayıcı akışı; lint, tip ve derleme başarılı. Mobil rapor görünümü
+sentetik veriyle incelendi; indirilen JSON gösterilen raporla birebir eşleşti.
+Bağımlılık denetimleri bilinen açık bildirmedi. Son CI kanıtı ilgili PR'da.
+Gerçek hesap, anahtar veya Binance isteği kullanılmadı. Bu inceleme ekonomik
+avantaj, 30 günlük gözlem veya canlı kullanım onayı değildir.

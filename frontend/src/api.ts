@@ -3,6 +3,7 @@ import type {
   MarketResponse,
   PaperArchiveDetail,
   PaperArchiveList,
+  PaperObservationReport,
   PaperState,
   ResearchReport,
   ResearchRequest,
@@ -94,6 +95,10 @@ export const api = {
     request<PaperArchiveList>(`/api/paper/archives?limit=${limit}&offset=${offset}`, { signal }),
   paperArchiveDetail: (sessionId: string, signal?: AbortSignal) =>
     request<PaperArchiveDetail>(`/api/paper/archives/${encodeURIComponent(sessionId)}`, { signal }),
+  paperObservation: (expectedSessionId: string, signal?: AbortSignal) =>
+    request<PaperObservationReport>(`/api/paper/observation?expected_session_id=${encodeURIComponent(expectedSessionId)}`, { signal }),
+  paperArchiveObservation: (sessionId: string, signal?: AbortSignal) =>
+    request<PaperObservationReport>(`/api/paper/archives/${encodeURIComponent(sessionId)}/observation`, { signal }),
   testnetStatus: (signal?: AbortSignal) => request<TestnetStatusResponse>('/api/testnet/status', { signal }),
   testnetSession: (signal?: AbortSignal) => request<TestnetSessionResponse>('/api/testnet/session', { signal }),
   testnetWatchStart: (cycleId: string, confirmTestnet: boolean, token: string, signal?: AbortSignal) =>

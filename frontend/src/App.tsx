@@ -4,6 +4,7 @@ import { CandleChart } from './components/CandleChart'
 import { JsonDetails } from './components/JsonDetails'
 import { SignalCard } from './components/SignalCard'
 import { TestnetPanel } from './components/TestnetPanel'
+import { PaperObservationPanel } from './components/PaperObservationPanel'
 import { decimal, money, time } from './format'
 import type {
   MarketResponse,
@@ -595,6 +596,7 @@ function Paper({ venue, symbol, interval, paper, busy, onCommand }: {
           </div>
         </section>
       </div>
+      {paper?.session_id && <PaperObservationPanel sessionId={paper.session_id} />}
       <PaperArchives
         items={archives}
         total={archiveTotal}
@@ -668,6 +670,7 @@ function PaperArchives({ items, total, offset, limit, loading, error, selectedId
                   <div><dt>Sanal dolum</dt><dd>{detail.state.fills?.length ?? 0}</dd></div>
                 </dl>
                 <JsonDetails value={detail.state} title="Salt okunur PAPER oturumu" />
+                <PaperObservationPanel sessionId={detail.session_id} archived compact />
               </>
             ) : <EmptyInner title="Bir PAPER kaydı seçin" text="Arşivdeki oturumun değiştirilemeyen ayrıntıları burada gösterilir." />}
           </div>

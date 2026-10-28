@@ -24,6 +24,14 @@ test.beforeEach(async ({ page }) => {
     }
     if (requestUrl.includes('/api/testnet/status')) return route.fulfill({ json: { mode: 'testnet', production_enabled: false, server_instance_id: 'e2e-server', observed_at_ms: Date.now(), ledger_status: 'ready', cycles: [{ cycle_id: 'e2e-cycle', symbol: 'BTCUSDT', state: 'ENTRY_SUBMITTED', stop_entry_requested: false, updated_at_ms: Date.now() }], watcher: testnetWatcher } })
     if (requestUrl.includes('/api/status')) return route.fulfill({ json: status })
+    if (requestUrl.includes('/observation')) return route.fulfill({ json: {
+      schema_version: 1, session_id: paperState.session_id, archived: false,
+      as_of: Date.now(), simulation: true, live_eligible: false,
+      evidence_status: 'no_observations', started_at: paperState.started_at,
+      calendar_elapsed_ms: 0, observation_span_ms: 0, observation: null,
+      results: { scope: 'entire_paper_session', cash: '0', equity: '0', realized_pnl: '0', fill_count: 0, position_open: false },
+      limitations: ['Sentetik tarayıcı testi; gerçek gözlem değildir.'],
+    } })
     if (requestUrl.includes('/api/paper/archives?')) return route.fulfill({ json: { items: archivedItems, total: archivedItems.length } })
     if (requestUrl.includes('/api/paper/archive')) {
       const previous = paperState
@@ -42,6 +50,49 @@ test.beforeEach(async ({ page }) => {
     } })
     return route.fulfill({ status: 404, json: { detail: 'Mock rota bulunamadı' } })
   })
+})
+
+test('mobil gözlem raporu kapsamları ayırır ve aynı raporu JSON indirir', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const evidence = {
+    schema_version: 1, session_id: '11111111-1111-4111-8111-111111111111', archived: false,
+    as_of: 1_800_000_000_000, simulation: true, live_eligible: false,
+    evidence_status: 'collecting', started_at: 1_799_827_200_000,
+    calendar_elapsed_ms: 172_800_000, observation_span_ms: 86_400_000,
+    observation: {
+      schema_version: 1, config_sha256: 'fixture', first_observed_at: 1_799_913_600_000,
+      last_observed_at: 1_800_000_000_000, first_code_identity: 'fixture', last_code_identity: 'fixture',
+      mixed_code_identity: false, process_count: 1, source_session_id: null,
+      counts: { attempts: 10, healthy_entry: 8, healthy_management: 2, unhealthy: 0 },
+      coverage_ms: { entry: 60_000, management: 10_000 }, gap_count: 1, max_gap_ms: 86_300_000,
+      interruptions: { restart: 0, stop: 0, restore: 0, code_change: 0, clock_regression: 0 },
+      last_status: 'healthy', last_scope: 'management', last_reason: 'ok',
+    },
+    results: { scope: 'entire_paper_session', cash: '1000', equity: '1000', realized_pnl: '0', fill_count: 0, position_open: false },
+    limitations: ['Sentetik tarayıcı testi; gerçek gözlem değildir.'],
+  }
+  await page.route('**/api/paper/observation?*', (route) => route.fulfill({ json: evidence }))
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Paper', exact: true }).first().click()
+  const panel = page.getByRole('region', { name: 'Güncel ileri gözlem raporu' })
+  await expect(panel.getByText('2 gün 0 sa', { exact: true })).toBeVisible()
+  await expect(panel.getByText('1 dk', { exact: true })).toBeVisible()
+  await expect(panel.getByText('10 sn', { exact: true })).toBeVisible()
+  await expect(panel.getByText('Canlı işleme uygun değil')).toBeVisible()
+  const downloadEvent = page.waitForEvent('download')
+  await panel.getByRole('button', { name: 'JSON raporunu indir' }).click()
+  const download = await downloadEvent
+  expect(download.suggestedFilename()).toBe(`paper-gozlem-${evidence.session_id}.json`)
+  const stream = await download.createReadStream()
+  stream!.setEncoding('utf8')
+  let contents = ''
+  for await (const chunk of stream!) contents += chunk
+  expect(JSON.parse(contents)).toEqual(evidence)
+  await panel.getByRole('button', { name: 'Raporu yenile' }).click()
+  await expect(panel.getByText('Kayıt mevcut', { exact: true })).toBeVisible()
+  const box = await panel.boundingBox()
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390)
+  await panel.screenshot({ path: '/tmp/spotlab-forward-mobile.png' })
 })
 
 test('Global BTC görünümü ve kilitli canlı operasyonu', async ({ page }) => {
