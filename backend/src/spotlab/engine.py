@@ -90,6 +90,7 @@ def empty_state() -> dict[str, Any]:
         "drawdown": "0",
         "realized_pnl": "0",
         "observation": None,
+        "observed_drawdown": None,
     }
 
 
@@ -121,6 +122,19 @@ PRE_OBSERVATION_STATE_KEYS = frozenset(
 )
 LEGACY_STATE_KEYS = PRE_OBSERVATION_STATE_KEYS - {"session_id", "started_at"}
 STATE_KEYS = frozenset(empty_state())
+PRE_DRAWDOWN_STATE_KEYS = STATE_KEYS - {"observed_drawdown"}
+
+OBSERVED_DRAWDOWN_KEYS = frozenset(
+    {
+        "schema_version",
+        "history_complete",
+        "maximum_drawdown",
+        "first_marked_at",
+        "last_marked_at",
+        "maximum_drawdown_at",
+        "last_quote_at",
+    }
+)
 
 OBSERVATION_SCOPES = frozenset({"entry", "management"})
 OBSERVATION_STATUSES = frozenset({"healthy", "unhealthy"})
@@ -200,6 +214,7 @@ class PaperEngine:
             state.setdefault("session_id", str(uuid.uuid4()))
             state.setdefault("started_at", self._legacy_started_at(state))
             state.setdefault("observation", None)
+            state.setdefault("observed_drawdown", None)
             state["entries_enabled"] = False
             state["reason"] = "Başlangıç uzlaştırması: yeni girişler kapalı."
             if not legacy:
@@ -287,6 +302,7 @@ class PaperEngine:
     @staticmethod
     def _public_state(state: dict[str, Any]) -> dict[str, Any]:
         state = json.loads(json.dumps(state))
+        state.setdefault("observed_drawdown", None)
         if state.get("observation") is not None:
             state["observation"].pop("continuity", None)
             state["observation"].pop("last_process_id", None)
@@ -338,6 +354,15 @@ class PaperEngine:
                         "peak": str(config.capital),
                         "day_start_equity": str(config.capital),
                         "day": self._day(at),
+                        "observed_drawdown": {
+                            "schema_version": 1,
+                            "history_complete": True,
+                            "maximum_drawdown": "0",
+                            "first_marked_at": None,
+                            "last_marked_at": None,
+                            "maximum_drawdown_at": None,
+                            "last_quote_at": None,
+                        },
                     }
                 )
             state.update(
@@ -588,7 +613,41 @@ class PaperEngine:
             "healthy": healthy,
         }
 
-    def _mark(self, state: dict[str, Any], cfg: PaperConfig, bid: Decimal, at: int) -> None:
+    @staticmethod
+    def _record_observed_drawdown(
+        state: dict[str, Any], *, at: int, quote_at: int
+    ) -> None:
+        current = state["drawdown"]
+        observed = state.get("observed_drawdown")
+        if observed is None:
+            state["observed_drawdown"] = {
+                "schema_version": 1,
+                "history_complete": False,
+                "maximum_drawdown": current,
+                "first_marked_at": at,
+                "last_marked_at": at,
+                "maximum_drawdown_at": at,
+                "last_quote_at": quote_at,
+            }
+            return
+        if observed["first_marked_at"] is None:
+            observed["first_marked_at"] = at
+            observed["maximum_drawdown"] = current
+            observed["maximum_drawdown_at"] = at
+        elif D(current) > D(observed["maximum_drawdown"]):
+            observed["maximum_drawdown"] = current
+            observed["maximum_drawdown_at"] = at
+        observed["last_marked_at"] = at
+        observed["last_quote_at"] = quote_at
+
+    def _mark(
+        self,
+        state: dict[str, Any],
+        cfg: PaperConfig,
+        bid: Decimal,
+        at: int,
+        quote_at: int,
+    ) -> None:
         equity = D(state["cash"])
         if state["position"]:
             equity += D(state["position"]["quantity"]) * bid * (1 - cfg.fee_rate)
@@ -602,6 +661,7 @@ class PaperEngine:
         state["equity"], state["peak"] = str(equity), str(peak)
         state["daily_loss"] = str(max(D(0), D(state["day_start_equity"]) - equity))
         state["drawdown"] = str((peak - equity) / peak if peak else D(0))
+        self._record_observed_drawdown(state, at=at, quote_at=quote_at)
 
     def _tick_valid(
         self,
@@ -616,7 +676,7 @@ class PaperEngine:
         at: int,
         force_close: bool,
     ) -> None:
-        self._mark(state, cfg, quote.bid, at)
+        self._mark(state, cfg, quote.bid, at, quote.observed_at)
         risk_hit = (
             D(state["daily_loss"]) >= cfg.capital * cfg.daily_loss_limit
             or D(state["drawdown"]) >= cfg.max_drawdown
@@ -650,7 +710,7 @@ class PaperEngine:
                     self._sell(state, qty, price, cfg, at, exit_reason)
                 else:
                     state["reason"] = "Çıkış bekliyor: en iyi alışta likidite yok."
-            self._mark(state, cfg, quote.bid, at)
+            self._mark(state, cfg, quote.bid, at, quote.observed_at)
             return
         if not state["entries_enabled"] or force_close:
             return
@@ -714,7 +774,7 @@ class PaperEngine:
         self._record_fill(state, "BUY", qty, price, qty * price * cfg.fee_rate, at, "signal")
         state["daily_trades"] += 1
         state["reason"] = "Sanal pozisyon açık; ekonomik avantaj henüz onaylanmış değildir."
-        self._mark(state, cfg, quote.bid, at)
+        self._mark(state, cfg, quote.bid, at, quote.observed_at)
 
     def _sell(
         self,
@@ -794,6 +854,7 @@ class PaperEngine:
         *,
         legacy: bool = False,
         pre_observation: bool = False,
+        pre_drawdown: bool = False,
     ) -> dict[str, Any]:
         if not isinstance(candidate, dict):
             raise ValueError("Yedek durumu geçersiz")
@@ -802,6 +863,8 @@ class PaperEngine:
             if legacy
             else PRE_OBSERVATION_STATE_KEYS
             if pre_observation
+            else PRE_DRAWDOWN_STATE_KEYS
+            if pre_drawdown
             else STATE_KEYS
         )
         if set(candidate) != required:
@@ -809,6 +872,8 @@ class PaperEngine:
         state = dict(candidate)
         if legacy or pre_observation:
             state["observation"] = None
+        if legacy or pre_observation or pre_drawdown:
+            state["observed_drawdown"] = None
         if not legacy:
             try:
                 parsed = uuid.UUID(state["session_id"])
@@ -877,6 +942,11 @@ class PaperEngine:
             if cfg is None:
                 raise ValueError("Yapılandırmasız paper gözlemi olamaz")
             cls._validate_observation(observation, cls._config_sha256(state["config"]))
+        cls._validate_observed_drawdown(
+            state["observed_drawdown"],
+            configured=cfg is not None,
+            current_drawdown=state["drawdown"],
+        )
         for name in ("orders", "fills", "audit"):
             if not isinstance(state[name], list):
                 raise ValueError("Paper geçmişi geçersiz")
@@ -992,6 +1062,69 @@ class PaperEngine:
         return state
 
     @classmethod
+    def _validate_observed_drawdown(
+        cls, candidate: Any, *, configured: bool, current_drawdown: Any
+    ) -> None:
+        if candidate is None:
+            return
+        if (
+            not configured
+            or not isinstance(candidate, dict)
+            or set(candidate) != OBSERVED_DRAWDOWN_KEYS
+        ):
+            raise ValueError("Paper gözlenen düşüş şeması geçersiz")
+        if type(candidate["schema_version"]) is not int or candidate["schema_version"] != 1:
+            raise ValueError("Paper gözlenen düşüş sürümü geçersiz")
+        if type(candidate["history_complete"]) is not bool:
+            raise ValueError("Paper gözlenen düşüş geçmişi geçersiz")
+        maximum = candidate["maximum_drawdown"]
+        if not isinstance(maximum, str) or not isinstance(current_drawdown, str):
+            raise ValueError("Paper gözlenen azami düşüşü geçersiz")
+        try:
+            parsed = D(maximum)
+            current = D(current_drawdown)
+        except (InvalidOperation, TypeError) as exc:
+            raise ValueError("Paper gözlenen azami düşüşü geçersiz") from exc
+        if (
+            not parsed.is_finite()
+            or not current.is_finite()
+            or not ZERO <= parsed <= 1
+            or not ZERO <= current <= 1
+        ):
+            raise ValueError("Paper gözlenen azami düşüşü geçersiz")
+        timestamp_keys = (
+            "first_marked_at",
+            "last_marked_at",
+            "maximum_drawdown_at",
+            "last_quote_at",
+        )
+        for key in timestamp_keys:
+            value = candidate[key]
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError("Paper gözlenen düşüş zamanı geçersiz")
+        first = candidate["first_marked_at"]
+        last = candidate["last_marked_at"]
+        maximum_at = candidate["maximum_drawdown_at"]
+        quote_at = candidate["last_quote_at"]
+        if first is None:
+            if (
+                any(candidate[key] is not None for key in timestamp_keys)
+                or parsed != ZERO
+                or current != ZERO
+                or candidate["history_complete"] is not True
+            ):
+                raise ValueError("Paper gözlenen düşüş zamanları tutarsız")
+        elif (
+            last is None
+            or maximum_at is None
+            or quote_at is None
+            or quote_at > last
+            or last - quote_at > 5000
+            or parsed < current
+        ):
+            raise ValueError("Paper gözlenen düşüş zamanları tutarsız")
+
+    @classmethod
     def _validate_observation(cls, candidate: Any, config_sha256: str) -> None:
         if not isinstance(candidate, dict) or set(candidate) != OBSERVATION_KEYS:
             raise ValueError("Paper gözlem şeması geçersiz")
@@ -1098,7 +1231,11 @@ class PaperEngine:
 
     @classmethod
     def _validate_archive(
-        cls, candidate: Any, *, pre_observation: bool = False
+        cls,
+        candidate: Any,
+        *,
+        pre_observation: bool = False,
+        pre_drawdown: bool = False,
     ) -> tuple[str, int, dict[str, Any]]:
         if not isinstance(candidate, dict) or set(candidate) != {
             "session_id",
@@ -1106,7 +1243,11 @@ class PaperEngine:
             "state",
         }:
             raise ValueError("Arşiv yedeği geçersiz")
-        state = cls._validate_state(candidate["state"], pre_observation=pre_observation)
+        state = cls._validate_state(
+            candidate["state"],
+            pre_observation=pre_observation,
+            pre_drawdown=pre_drawdown,
+        )
         session_id = candidate["session_id"]
         archived_at = candidate["archived_at"]
         if session_id != state["session_id"]:
@@ -1227,7 +1368,47 @@ class PaperEngine:
             "Kapsama yalnız en fazla 10 saniye aralıklı sağlıklı örnekler arasından hesaplanır; "
             "kesintisiz hizmet garantisi değildir.",
             "Sonuçlar bütün paper oturumuna aittir; gözlemden önceki işlemleri içerebilir.",
+            "Gözlenen portföy düşüşü yalnızca geçerli kotasyonlarla kaydedilen ledger "
+            "işaretleridir; gerçek gün içi azami düşüş değildir.",
+            "Gözlenen düşüş açık pozisyonların kotasyonla işaretlenmiş değerini içerir.",
         ]
+        observed = state.get("observed_drawdown")
+        available = observed is not None and observed["last_marked_at"] is not None
+        history_complete = observed is not None and observed["history_complete"] is True
+        if not history_complete:
+            limitations.append(
+                "Gözlenen düşüş geçmişi bu alan eklenmeden önceki ledger işaretlerini içermez."
+            )
+        if observed is not None and observed["last_marked_at"] is not None:
+            quote_delta = as_of - observed["last_quote_at"]
+            if quote_delta < 0:
+                quote_age_ms = None
+                freshness = "clock_regression"
+            else:
+                quote_age_ms = quote_delta
+                freshness = "fresh" if quote_delta <= 5000 else "stale"
+            observed_result = {
+                **json.loads(json.dumps(observed)),
+                "available": available,
+                "current_drawdown": state["drawdown"],
+                "quote_age_ms": quote_age_ms,
+                "freshness": freshness,
+            }
+        else:
+            baseline = observed or {}
+            observed_result = {
+                "schema_version": 1,
+                "history_complete": history_complete,
+                "maximum_drawdown": None,
+                "first_marked_at": baseline.get("first_marked_at"),
+                "last_marked_at": baseline.get("last_marked_at"),
+                "maximum_drawdown_at": baseline.get("maximum_drawdown_at"),
+                "last_quote_at": baseline.get("last_quote_at"),
+                "available": False,
+                "current_drawdown": None,
+                "quote_age_ms": None,
+                "freshness": "unavailable",
+            }
         if observation is not None and observation["source_session_id"] is not None:
             limitations.append(
                 "Gözlem geçmişi yedekten devralındı; süre zinciri kesildi. "
@@ -1270,6 +1451,7 @@ class PaperEngine:
                 "realized_pnl": state["realized_pnl"],
                 "fill_count": len(state["fills"]),
                 "position_open": state["position"] is not None,
+                "observed_drawdown": observed_result,
             },
             "limitations": limitations,
         }
@@ -1298,19 +1480,20 @@ class PaperEngine:
                     "ORDER BY archived_at, session_id"
                 )
             ).mappings()
-            archives = [
-                {
-                    "session_id": row["session_id"],
-                    "archived_at": row["archived_at"],
-                    "state": {
-                        **json.loads(row["payload"]),
-                        "observation": json.loads(row["payload"]).get("observation"),
-                    },
-                }
-                for row in rows
-            ]
+            archives = []
+            for row in rows:
+                archived_state = json.loads(row["payload"])
+                archived_state.setdefault("observation", None)
+                archived_state.setdefault("observed_drawdown", None)
+                archives.append(
+                    {
+                        "session_id": row["session_id"],
+                        "archived_at": row["archived_at"],
+                        "state": archived_state,
+                    }
+                )
             Path(destination).write_text(
-                json.dumps({"schema": 3, "current": state, "archives": archives}),
+                json.dumps({"schema": 4, "current": state, "archives": archives}),
                 encoding="utf-8",
             )
 
@@ -1347,6 +1530,24 @@ class PaperEngine:
                 raise ValueError("Etkin oturum arşiv geçmişinde yinelenemez")
             restored["session_id"] = str(uuid.uuid4())
         elif payload.get("schema") == 3 and set(payload) == {
+            "schema",
+            "current",
+            "archives",
+        }:
+            restored = self._validate_state(payload["current"], pre_drawdown=True)
+            original_session_id = restored["session_id"]
+            if not isinstance(payload["archives"], list):
+                raise ValueError("Arşiv listesi geçersiz")
+            archives = [
+                self._validate_archive(item, pre_drawdown=True) for item in payload["archives"]
+            ]
+            archive_ids = [item[0] for item in archives]
+            if len(archive_ids) != len(set(archive_ids)):
+                raise ValueError("Yinelenen arşiv oturum kimliği")
+            if original_session_id in set(archive_ids):
+                raise ValueError("Etkin oturum arşiv geçmişinde yinelenemez")
+            restored["session_id"] = str(uuid.uuid4())
+        elif payload.get("schema") == 4 and set(payload) == {
             "schema",
             "current",
             "archives",

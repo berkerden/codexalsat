@@ -129,6 +129,16 @@ penceresi karar zamanından önce bitmeli; örnekler örtüşmemeli. Benzerlik o
     geçmişten devralınan veya değişmiş kodla toplanan kanıt tek sabit deney diye
     sunulmaz. Rapor canlı uygunluğu veya ekonomik avantaj onayı vermez.
 
+17. Paper gözlenen en büyük düşüşü, açık pozisyonlar dahil geçerli fiyatla
+    yapılan işlem öncesi ve sonrası özsermaye değerlemelerinde kalıcı tutulur.
+    Anlık düşüşten ve kapanmış işlem serisi düşüşünden ayrıdır. Ölçüm yalnız
+    örneklenen değerleri kapsar; aradaki fiyatların gerçek en büyük düşüşü
+    iddia edilmez. Eski geçmiş tamamlanmış gibi üretilmez. Geçersiz/eski fiyat
+    ölçüm tarihini veya maksimumu yenilemez. Rapor anındaki kotasyon yaşı
+    açıkça belirtilir; okuma risk yetkisi vermez. Mevcut risk tetikleme hesabı
+    korunur: nakit + miktar × bid × (1 − komisyon); varsayımsal çıkış kayması
+    ayrıca düşülmez, gerçekleşen sanal dolumda uygulanır.
+
 ## Aşama kabulü ve operasyon
 
 A0: gerçek GitHub deposu, ilk push, CI, secret taraması. Public depo ve CI geçen

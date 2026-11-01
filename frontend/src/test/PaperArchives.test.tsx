@@ -58,6 +58,7 @@ it('aynı arşivi yeniden açar ve hata sonrası aynı kaydı tekrar okuyabilir'
   for (let index = 0; index < 2; index++) {
     await userEvent.click(row)
     expect(await within(region).findByText('PAPER · SALT OKUNUR')).toBeInTheDocument()
+    expect(within(region).getByRole('region', { name: 'Arşiv ileri gözlem raporu' })).toBeInTheDocument()
     expect(within(region).queryByText('PAPER kaydı açılıyor…')).not.toBeInTheDocument()
   }
   await userEvent.click(row)

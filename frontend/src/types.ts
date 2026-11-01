@@ -159,6 +159,22 @@ export interface PaperObservationSummary {
   last_reason: string | null
 }
 
+export type PaperObservedDrawdownFreshness = 'unavailable' | 'fresh' | 'stale' | 'clock_regression'
+
+export interface PaperObservedDrawdown {
+  schema_version: 1
+  history_complete: boolean
+  maximum_drawdown: string | null
+  first_marked_at: number | null
+  last_marked_at: number | null
+  maximum_drawdown_at: number | null
+  last_quote_at: number | null
+  available: boolean
+  current_drawdown: string | null
+  quote_age_ms: number | null
+  freshness: PaperObservedDrawdownFreshness
+}
+
 export interface PaperObservationReport {
   schema_version: 1
   session_id: string
@@ -178,6 +194,8 @@ export interface PaperObservationReport {
     realized_pnl: string
     fill_count: number
     position_open: boolean
+    /** Optional only for compatibility with reports archived before drawdown marking existed. */
+    observed_drawdown?: PaperObservedDrawdown
   }
   limitations: string[]
 }

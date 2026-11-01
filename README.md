@@ -40,6 +40,8 @@ kendiliğinden açmaz. Durdurmak için `Ctrl+C`; açık paper pozisyonları kay�
    İleri gözlem raporu, kaydedilen giriş değerlendirmesi ve pozisyon izleme
    sürelerini ayrı gösterir; rapor yerel JSON dosyası olarak indirilebilir.
    Geçmiş işlemlerden gözlem süresi üretilmez; rapor canlı kullanım onayı vermez.
+   Açık pozisyonlar dahil gözlenen en büyük düşüş, anlık düşüşten ayrı gösterilir.
+   Eski dönemlerin bilinmeyen düşüşü ve rapor anındaki fiyat güncelliği belirtilir.
 4. **Yeni girişleri durdur** mevcut pozisyonun çıkış yönetimini korur.
    **Bot pozisyonlarını kapat** sadece sanal bot pozisyonunu kapatır; bağlantı yoksa
    istek kalıcı olarak bekler. Hiçbir manuel borsa varlığına erişilmez.
@@ -100,7 +102,9 @@ Aynı testi tekrar çalıştırmak yeni bağımsız kanıt sayılmaz.
 
 Bu ilk sürüm mum tabanlı backtestte emir kuyruğu, gerçek limit dolumu veya kesin
 stop fiyatı iddia etmez. `closed_trade_equity_drawdown` yalnız kapanmış işlem
-serisinin düşüşüdür; gerçek pozisyon içi portföy maksimum düşüşü henüz raporlanmaz.
+serisinin düşüşüdür. Paper raporu açık pozisyonlar dahil örneklenen değerlemelerin
+en büyük düşüşünü saklar; iki örnek arasındaki veya geçmiş mum içindeki gerçek
+portföy maksimum düşüşünü bildiğini iddia etmez.
 Paper dolumları kotasyon miktarıyla sınırlanan simülasyonlardır; borsa kuyruğu değildir.
 
 Testnet imzalama, borsa kuralları, emir sorgulama ve tek alış→OCO akışı ayrı modüldedir;
