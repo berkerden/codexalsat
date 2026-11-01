@@ -237,6 +237,7 @@ def test_legacy_restore_and_invalid_schema_two_are_atomic(tmp_path: Path) -> Non
     legacy.pop("session_id")
     legacy.pop("started_at")
     legacy.pop("observation")
+    legacy.pop("observed_drawdown")
     legacy["audit"].append({"time": AT, "event": "paper_start", "message": "legacy"})
     legacy_path = tmp_path / "legacy.json"
     legacy_path.write_text(json.dumps({"schema": 1, "state": legacy}), encoding="utf-8")
@@ -341,6 +342,7 @@ def test_invalid_backup_rejected_without_modifying_target(tmp_path, schema, bad_
         state.pop("session_id")
         state.pop("started_at")
         state.pop("observation")
+        state.pop("observed_drawdown")
         payload = {"schema": 1, "state": state}
     path.write_text(json.dumps(payload))
     target = PaperEngine("sqlite:///" + str(tmp_path / "target.sqlite"))
@@ -403,7 +405,7 @@ def test_archive_and_start_serialize_without_moving_authority(engine):
         assert engine.archives()["total"] == 0
 
 
-@pytest.mark.parametrize("schema", [1, 2])
+@pytest.mark.parametrize("schema", [1, 4])
 def test_missing_config_cannot_mix_historical_profit_with_new_capital(tmp_path, schema):
     source = PaperEngine("sqlite:///" + str(tmp_path / "source.sqlite"))
     session_id = source.snapshot()["session_id"]
@@ -417,10 +419,12 @@ def test_missing_config_cannot_mix_historical_profit_with_new_capital(tmp_path, 
     state["config"] = None
     state["mode"] = "suggestions"
     state["started_at"] = None
+    state["observed_drawdown"] = None
     if schema == 1:
         state.pop("session_id")
         state.pop("started_at")
         state.pop("observation")
+        state.pop("observed_drawdown")
         payload = {"schema": 1, "state": state}
     path.write_text(json.dumps(payload))
     target = PaperEngine("sqlite:///" + str(tmp_path / "target.sqlite"))

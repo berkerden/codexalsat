@@ -74,6 +74,32 @@ gözlem hedefi, kapsama ve kesintiler, yeterli bağımsız işlem, maliyet stres
 ekonomik avantaj ayrıca değerlendirilir. Canlı kilidi bu raporla açılmaz.
 Bu paket arka plan işletim sistemi servisi veya otomatik bildirim kurmaz.
 
+## Açık pozisyonlar dahil gözlenen en büyük düşüş
+
+Gözlem raporunda anlık düşüş ve **gözlenen en büyük düşüş** ayrı gösterilir.
+Sanal özsermaye, nakit ile açık miktarın en iyi alış fiyatındaki değerinin
+tahmini çıkış komisyonu düşülmüş toplamıdır. Gelecekteki çıkış kayması bu
+değerlemeden ayrıca düşülmez; gerçekleşen sanal satışın fiyatına uygulanır.
+Bu paket mevcut risk eşiği veya işlem boyutu hesabını değiştirmez.
+
+En büyük düşüş, geçerli fiyatla yapılan işlem öncesi ve sonrası değerlemelerde
+korunur. Kısmi çıkış ve işlem maliyetleri dahil edilir; fiyat toparlansa da
+önceki en büyük değer silinmez. Bu yalnız örneklenen fiyatlarda görülen
+düşüştür: bağlantı kesintisindeki veya iki örnek arasındaki en düşük değerin
+bilindiği anlamına gelmez. Araştırma/backtest kapanmış işlem serisi düşüşünden
+ayrıdır; mum içi gerçek portföy düşüşü raporlanmış sayılmaz.
+
+Henüz geçerli fiyatla değerleme yapılmadıysa değer **bilinmiyor** olarak
+gösterilir. Eski oturumlarda önceki en büyük düşüş hesaplanmış gibi üretilmez;
+ilk yeni değerlemeden itibaren gözlenen değer, geçmiş kapsamı eksik etiketiyle
+gösterilir. Yeniden başlatma, arşivleme ve yeni biçimli yedekten dönüş kayıtlı
+en büyük değeri korur. Farklı deneyde ayrı kayıt başlar.
+
+Kotasyon yaşı ve güncellik etiketi raporun alındığı ana aittir. Eski fiyat
+ve veri hatası değerleme zamanını yenilemez. **Raporu yenile** yalnız okuma
+yapar; gözlem, yeni işlem veya giriş yetkisi oluşturmaz. Süresi geçmiş veya
+gelecek zamanlı fiyat, güncel risk kanıtı olarak yorumlanmamalıdır.
+
 ## Yedek ve geri yükleme
 
 Önce panelden yeni girişleri durdurun; ardından `Ctrl+C` ile backend'i kapatın.
@@ -88,11 +114,11 @@ Geri yükleme öncesi mevcut dosyayı farklı bir adla koruyun. Yedeği `data/pa
 konumuna kopyalayın ve backend'i başlatın. Başlangıç tüm giriş yetkisini sıfırlar;
 açık pozisyonlar, dolumlar, nakit ve arşiv tablosu korunur. `test_restore_verified_and_does_not_restore_authorization`
 ve yeniden başlatma testleri mantıksal yedek geri yükleme değişmezlerini doğrular.
-Programatik `PaperEngine.backup` mantıksal yedeğinin sürüm 3 biçimi mevcut
+Programatik `PaperEngine.backup` mantıksal yedeğinin sürüm 4 biçimi mevcut
 oturumu ve bütün arşivleri aynı işlemden okur. `restore` yalnız henüz
 yapılandırılmamış ve arşivsiz hedefe uygulanabilir; mevcut deney veya arşiv
-üzerine yazmaz. Eski sürüm 1 ve 2 yedekleri de boş hedefe yüklenebilir; eski
-biçimden gözlem kanıtı üretilmez. Geri yükleme
+üzerine yazmaz. Eski sürüm 1, 2 ve 3 yedekleri de boş hedefe yüklenebilir;
+eski biçimde bulunmayan gözlem veya en büyük düşüş geçmişi üretilmez. Geri yükleme
 aktif oturuma yeni kimlik verir, geçmiş arşiv kimliklerini korur ve girişleri
 kapalı bırakır. Panelde geri yükleme veya arşiv silme yolu bulunmaz.
 

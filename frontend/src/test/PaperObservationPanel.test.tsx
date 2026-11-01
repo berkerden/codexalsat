@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { PaperObservationPanel } from '../components/PaperObservationPanel'
@@ -37,6 +37,21 @@ const report = {
   results: { scope: 'entire_paper_session' as const, cash: '1010', equity: '1015', realized_pnl: '10', fill_count: 2, position_open: true },
   limitations: ['Gözlem ekonomik avantajı doğrulamaz.'],
 }
+
+const drawdown = (overrides: Record<string, unknown> = {}) => ({
+  schema_version: 1,
+  history_complete: true,
+  maximum_drawdown: '0.025',
+  first_marked_at: 1_799_999_000_000,
+  last_marked_at: 1_800_000_000_000,
+  maximum_drawdown_at: 1_799_999_500_000,
+  last_quote_at: 1_799_999_935_000,
+  available: true,
+  current_drawdown: '0.01',
+  quote_age_ms: 65_000,
+  freshness: 'fresh',
+  ...overrides,
+})
 
 const json = (value: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } }))
 
@@ -95,4 +110,51 @@ it('yanlış oturum kimlikli yanıtı rapor olarak göstermez', async () => {
   render(<PaperObservationPanel sessionId={sessionId} />)
   expect(await screen.findByRole('alert')).toHaveTextContent('Rapor farklı bir PAPER oturumuna ait')
   expect(screen.queryByRole('button', { name: 'JSON raporunu indir' })).not.toBeInTheDocument()
+})
+
+it('geçerli işaret yoksa düşüşü sıfır yerine bilinmiyor gösterir', async () => {
+  vi.mocked(fetch).mockImplementation(() => json({
+    ...report,
+    results: { ...report.results, observed_drawdown: drawdown({
+      history_complete: false,
+      maximum_drawdown: null,
+      first_marked_at: null,
+      last_marked_at: null,
+      maximum_drawdown_at: null,
+      last_quote_at: null,
+      available: false,
+      current_drawdown: null,
+      quote_age_ms: null,
+      freshness: 'unavailable',
+    }) },
+  }))
+  render(<PaperObservationPanel sessionId={sessionId} />)
+  const card = await screen.findByRole('region', { name: 'Örneklenen gözlenen maksimum düşüş' })
+  expect(within(card).getByText('Kotasyon yok')).toBeInTheDocument()
+  expect(within(card).getAllByText('Bilinmiyor').length).toBeGreaterThan(0)
+  expect(within(card).getByText(/bilinmeyen değer sıfır olarak gösterilmez/)).toBeInTheDocument()
+  expect(within(card).queryByText('%0', { exact: true })).not.toBeInTheDocument()
+})
+
+it('bayat kotasyonda oranı yüzdeye çevirir ve tazeliğin rapor anına ait olduğunu açıklar', async () => {
+  vi.mocked(fetch).mockImplementation(() => json({ ...report, results: { ...report.results, observed_drawdown: drawdown({ freshness: 'stale' }) } }))
+  render(<PaperObservationPanel sessionId={sessionId} />)
+  const card = await screen.findByRole('region', { name: 'Örneklenen gözlenen maksimum düşüş' })
+  expect(within(card).getByText('%2,5')).toBeInTheDocument()
+  expect(within(card).getByText('%1')).toBeInTheDocument()
+  expect(within(card).getByText('Eski kotasyon')).toBeInTheDocument()
+  expect(within(card).getByText('Rapor anındaki kotasyon yaşı')).toBeInTheDocument()
+  expect(within(card).getByText(/tazelik durumu raporun .* anındaki sabit görünümüdür/)).toBeInTheDocument()
+  expect(within(card).getByText(/özsermaye = nakit \+ miktar × bid × \(1 − ücret\)/)).toBeInTheDocument()
+  expect(within(card).getByText(/Varsayımsal kayma, gerçek bir simüle dolum gerçekleşene kadar düşülmez/)).toBeInTheDocument()
+  expect(within(card).getByText(/gün içi veya işaretler arası gerçek maksimum olduğu anlamına gelmez/)).toBeInTheDocument()
+})
+
+it('kısmi geçmişte maksimumu gösterirken önceki tarihin bilinmediğini işaretler', async () => {
+  vi.mocked(fetch).mockImplementation(() => json({ ...report, results: { ...report.results, observed_drawdown: drawdown({ history_complete: false }) } }))
+  render(<PaperObservationPanel sessionId={sessionId} />)
+  const card = await screen.findByRole('region', { name: 'Örneklenen gözlenen maksimum düşüş' })
+  expect(within(card).getByText('%2,5')).toBeInTheDocument()
+  expect(within(card).getByText('Önceki geçmiş bilinmiyor.')).toBeInTheDocument()
+  expect(within(card).getByText(/yalnız mevcut işaretleme geçmişini kapsar/)).toBeInTheDocument()
 })

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, errorMessage } from '../api'
 import { money, time } from '../format'
-import type { PaperObservationReport } from '../types'
+import type { PaperObservationReport, PaperObservedDrawdown, PaperObservedDrawdownFreshness } from '../types'
 
 function duration(value: number): string {
   if (!Number.isFinite(value) || value < 0) return '—'
@@ -23,6 +23,46 @@ function download(report: PaperObservationReport) {
   link.download = `paper-gozlem-${report.session_id}.json`
   link.click()
   URL.revokeObjectURL(url)
+}
+
+function percentage(value: string | null | undefined): string {
+  if (value == null || value.trim() === '') return 'Bilinmiyor'
+  const ratio = Number(value)
+  if (!Number.isFinite(ratio) || ratio < 0) return 'Bilinmiyor'
+  return new Intl.NumberFormat('tr-TR', { style: 'percent', maximumFractionDigits: 2 }).format(ratio)
+}
+
+const freshnessLabels: Record<PaperObservedDrawdownFreshness, string> = {
+  unavailable: 'Kotasyon yok',
+  fresh: 'Taze kotasyon',
+  stale: 'Eski kotasyon',
+  clock_regression: 'Saat gerilemesi',
+}
+
+function ObservedDrawdownCard({ value, reportAsOf }: { value?: PaperObservedDrawdown; reportAsOf: number }) {
+  const validMaximum = value?.available === true && percentage(value.maximum_drawdown) !== 'Bilinmiyor'
+  const freshness = value && value.freshness in freshnessLabels ? value.freshness : 'unavailable'
+  return (
+    <section className="observed-drawdown" aria-label="Örneklenen gözlenen maksimum düşüş">
+      <div className="observed-drawdown-heading">
+        <div><span className="eyebrow">İşaretlenmiş özsermaye örnekleri</span><h3>Örneklenen gözlenen maksimum düşüş</h3></div>
+        <span className={`drawdown-freshness ${freshness}`}>{freshnessLabels[freshness]}</span>
+      </div>
+      <div className="observed-drawdown-primary">
+        <div><span>Maksimum düşüş</span><b>{validMaximum ? percentage(value?.maximum_drawdown) : 'Bilinmiyor'}</b></div>
+        <p>{validMaximum ? 'Geçerli kotasyonlarla işaretlenen örnekler içindeki en yüksek düşüş.' : 'Geçerli bir özsermaye işareti yok; bilinmeyen değer sıfır olarak gösterilmez.'}</p>
+      </div>
+      <dl className="observed-drawdown-details">
+        <div><dt>Rapor anındaki düşüş</dt><dd>{value?.available ? percentage(value.current_drawdown) : 'Bilinmiyor'}</dd></div>
+        <div><dt>Maksimumun işaretlendiği an</dt><dd>{validMaximum && value?.maximum_drawdown_at != null ? time(value.maximum_drawdown_at, true) : 'Bilinmiyor'}</dd></div>
+        <div><dt>İlk / son işaret</dt><dd>{value?.first_marked_at != null && value?.last_marked_at != null ? `${time(value.first_marked_at, true)} / ${time(value.last_marked_at, true)}` : 'Bilinmiyor'}</dd></div>
+        <div><dt>Rapor anındaki kotasyon yaşı</dt><dd>{value?.quote_age_ms != null ? duration(value.quote_age_ms) : 'Bilinmiyor'}</dd></div>
+      </dl>
+      {value?.history_complete === false && <p className="drawdown-history-warning"><b>Önceki geçmiş bilinmiyor.</b> Bu maksimum yalnız mevcut işaretleme geçmişini kapsar.</p>}
+      {(freshness === 'stale' || freshness === 'clock_regression') && <p className="drawdown-quote-warning">Bu değer <b>{time(value?.last_quote_at ?? null, true)}</b> kotasyonuyla hesaplandı; tazelik durumu raporun {time(reportAsOf, true)} anındaki sabit görünümüdür.</p>}
+      <p className="drawdown-method">Yöntem: özsermaye = nakit + miktar × bid × (1 − ücret). Varsayımsal kayma, gerçek bir simüle dolum gerçekleşene kadar düşülmez. Bu ölçüm örneklenen işaretlerin maksimumudur; gün içi veya işaretler arası gerçek maksimum olduğu anlamına gelmez.</p>
+    </section>
+  )
 }
 
 export function PaperObservationPanel({ sessionId, archived = false, compact = false }: {
@@ -98,6 +138,7 @@ export function PaperObservationPanel({ sessionId, archived = false, compact = f
             <div><b>Tüm PAPER oturumu sonucu</b><span>Bu sonuçlar ileri gözlem başlamadan önceki hareketleri de içerebilir.</span></div>
             <dl><div><dt>Nakit</dt><dd>{money(report.results.cash)}</dd></div><div><dt>Özsermaye</dt><dd>{money(report.results.equity)}</dd></div><div><dt>Gerçekleşen K/Z</dt><dd>{money(report.results.realized_pnl)}</dd></div><div><dt>Dolum</dt><dd>{report.results.fill_count}</dd></div></dl>
           </div>
+          <ObservedDrawdownCard value={report.results.observed_drawdown} reportAsOf={report.as_of} />
           {report.limitations.length > 0 && <details className="observation-limitations"><summary>Sınırlamalar ({report.limitations.length})</summary><ul>{report.limitations.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></details>}
           <p className="coverage-method">Örneklenen kapsam, aralarında en fazla 10 saniye bulunan sağlıklı ardışık kayıtlarla hesaplanır; kesintisiz izleme garantisi değildir.</p>
           <div className="observation-footer"><small>Son rapor: {time(report.as_of, true)} · simülasyon</small><div><button type="button" onClick={() => setRevision((value) => value + 1)}>Raporu yenile</button><button type="button" onClick={() => download(report)}>JSON raporunu indir</button></div></div>

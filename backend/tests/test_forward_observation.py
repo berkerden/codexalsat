@@ -134,7 +134,7 @@ def test_backup_restores_evidence_and_archive_without_bridging(engine, tmp_path)
     source_id = engine.snapshot()["session_id"]
     backup = tmp_path / "copy.json"
     engine.backup(str(backup))
-    assert json.loads(backup.read_text())["schema"] == 3
+    assert json.loads(backup.read_text())["schema"] == 4
     target = PaperEngine(f"sqlite:///{tmp_path / 'restored.sqlite'}")
     try:
         target.restore(str(backup))
@@ -192,7 +192,9 @@ def test_schema_two_and_existing_archive_never_backfill_observation(tmp_path):
         backup = json.loads(path.read_text())
         backup["schema"] = 2
         backup["current"].pop("observation")
+        backup["current"].pop("observed_drawdown")
         backup["archives"][0]["state"].pop("observation")
+        backup["archives"][0]["state"].pop("observed_drawdown")
         path.write_text(json.dumps(backup))
         target.restore(str(path))
         assert target.archive_observation_report(identity)["observation"] is None

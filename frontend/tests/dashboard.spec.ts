@@ -68,17 +68,27 @@ test('mobil gözlem raporu kapsamları ayırır ve aynı raporu JSON indirir', a
       interruptions: { restart: 0, stop: 0, restore: 0, code_change: 0, clock_regression: 0 },
       last_status: 'healthy', last_scope: 'management', last_reason: 'ok',
     },
-    results: { scope: 'entire_paper_session', cash: '1000', equity: '1000', realized_pnl: '0', fill_count: 0, position_open: false },
+    results: { scope: 'entire_paper_session', cash: '1000', equity: '1000', realized_pnl: '0', fill_count: 0, position_open: false, observed_drawdown: {
+      schema_version: 1, history_complete: false, maximum_drawdown: '0.025',
+      first_marked_at: 1_799_999_000_000, last_marked_at: 1_800_000_000_000,
+      maximum_drawdown_at: 1_799_999_500_000, last_quote_at: 1_799_999_935_000,
+      available: true, current_drawdown: '0.01', quote_age_ms: 65_000, freshness: 'stale',
+    } },
     limitations: ['Sentetik tarayıcı testi; gerçek gözlem değildir.'],
   }
   await page.route('**/api/paper/observation?*', (route) => route.fulfill({ json: evidence }))
   await page.goto('/')
   await page.getByRole('button', { name: 'Paper', exact: true }).first().click()
   const panel = page.getByRole('region', { name: 'Güncel ileri gözlem raporu' })
+  const observationTimes = panel.locator('.observation-times')
   await expect(panel.getByText('2 gün 0 sa', { exact: true })).toBeVisible()
-  await expect(panel.getByText('1 dk', { exact: true })).toBeVisible()
-  await expect(panel.getByText('10 sn', { exact: true })).toBeVisible()
+  await expect(observationTimes.getByText('1 dk', { exact: true })).toBeVisible()
+  await expect(observationTimes.getByText('10 sn', { exact: true })).toBeVisible()
   await expect(panel.getByText('Canlı işleme uygun değil')).toBeVisible()
+  const drawdownCard = panel.getByRole('region', { name: 'Örneklenen gözlenen maksimum düşüş' })
+  await expect(drawdownCard.getByText('%2,5')).toBeVisible()
+  await expect(drawdownCard.getByText('Eski kotasyon')).toBeVisible()
+  await expect(drawdownCard.getByText('Önceki geçmiş bilinmiyor.')).toBeVisible()
   const downloadEvent = page.waitForEvent('download')
   await panel.getByRole('button', { name: 'JSON raporunu indir' }).click()
   const download = await downloadEvent
