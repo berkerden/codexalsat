@@ -74,6 +74,30 @@ gözlem hedefi, kapsama ve kesintiler, yeterli bağımsız işlem, maliyet stres
 ekonomik avantaj ayrıca değerlendirilir. Canlı kilidi bu raporla açılmaz.
 Bu paket arka plan işletim sistemi servisi veya otomatik bildirim kurmaz.
 
+## Son kaydedilen veri sorunu
+
+Paper gözlem raporundaki bu alan, son ayrıntılı hata kaydını ve kaydedildiği
+zamanı gösterir. Saat farkı, mum kalitesi/güncelliği, fiyat güncelliği,
+sembol kuralları ve veri alma aşamasındaki hatalar ayrı açıklanır. Bir veri
+alma aşamasının başarısız olması, kesintinin kesin ağ veya borsa nedenini
+bildiğimiz anlamına gelmez. Ham hata/yanıt metinleri rapora taşınmaz.
+
+Bu **geçmiş olay kaydıdır**; şimdi arıza bulunduğunu veya sorunun düzeldiğini
+kanıtlamaz. Yeniden başlatma, arşiv ve yedekten dönüşte korunur. Eski sürümde
+yalnız genel hata kaydedilmişse ayrıntılı neden bilinmiyor olarak kalır.
+Raporu okumak, yenilemek veya indirmek yeni işlem yetkisi vermez.
+
+Aynı kesintinin tekrarlayan tanıları birleştirilir. Sağlıklı gözlem veya yeni
+çalışma dönemi sonrasında tekrar oluşan hata ayrı olaydır. Oturumda yalnız en
+yeni 100 ayrıntılı tanı saklanır; başlatma, durdurma ve diğer denetim kayıtları
+bu sınırla silinmez. Tarihler saat gerilemesi nedeniyle sırasız olabilir;
+son sorun en büyük zaman damgasıyla değil kayıt sırasıyla seçilir.
+
+Bilgisayarın uyuması veya kapanması yerel gözlemi kesebilir. Uyanınca oluşan
+eski veri/saat hatası girişleri durdurabilir; veri düzeldi diye yetki otomatik
+yenilenmez. Kesintiyi, o andaki fiyat/mum/saat durumuyla birlikte inceleyin.
+Eski kayıtta ayrıntı yoksa kesin bir neden veya kesintisiz gözlem varsaymayın.
+
 ## Açık pozisyonlar dahil gözlenen en büyük düşüş
 
 Gözlem raporunda anlık düşüş ve **gözlenen en büyük düşüş** ayrı gösterilir.

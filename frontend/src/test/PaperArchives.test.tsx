@@ -8,7 +8,7 @@ const archiveId = '33333333-3333-4333-8333-333333333333'
 const current = { session_id: id, started_at: 1700000000000, config: { symbol: 'BTCUSDT', interval: '5m', strategy: 'pullback', capital: '1000' }, entries_enabled: false, position: null, cash: '1000', equity: '1000', orders: [], fills: [] }
 const archived = { session_id: archiveId, started_at: 1700000000000, archived_at: 1700001000000, config: { symbol: 'SOLUSDT', interval: '15m' }, cash: '90', equity: '90', realized_pnl: '-10', order_count: 2, fill_count: 2 }
 const detail = { session_id: archiveId, archived_at: archived.archived_at, state: { ...current, ...archived, orders: [{}, {}], fills: [{}, {}] } }
-const observation = { schema_version: 1, session_id: archiveId, archived: true, as_of: 1700001000000, simulation: true, live_eligible: false, evidence_status: 'no_observations', started_at: 1700000000000, calendar_elapsed_ms: 1000000, observation_span_ms: 0, observation: null, results: { scope: 'entire_paper_session', cash: '90', equity: '90', realized_pnl: '-10', fill_count: 2, position_open: false }, limitations: [] }
+const observation = { schema_version: 1, session_id: archiveId, archived: true, as_of: 1700001000000, simulation: true, live_eligible: false, evidence_status: 'no_observations', started_at: 1700000000000, calendar_elapsed_ms: 1000000, observation_span_ms: 0, observation: null, last_data_issue: { time: 1700000900000, message: 'Arşivlenen oturumda kotasyon gecikmesi kaydedildi.' }, results: { scope: 'entire_paper_session', cash: '90', equity: '90', realized_pnl: '-10', fill_count: 2, position_open: false }, limitations: [] }
 const json = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }))
 let paperRead: () => Promise<Response>
 let archiveRead: (path: string) => Promise<Response>
@@ -58,7 +58,11 @@ it('aynı arşivi yeniden açar ve hata sonrası aynı kaydı tekrar okuyabilir'
   for (let index = 0; index < 2; index++) {
     await userEvent.click(row)
     expect(await within(region).findByText('PAPER · SALT OKUNUR')).toBeInTheDocument()
-    expect(within(region).getByRole('region', { name: 'Arşiv ileri gözlem raporu' })).toBeInTheDocument()
+    const observationPanel = within(region).getByRole('region', { name: 'Arşiv ileri gözlem raporu' })
+    expect(observationPanel).toBeInTheDocument()
+    const issue = within(observationPanel).getByRole('region', { name: 'Son kaydedilen veri sorunu' })
+    expect(within(issue).getByText('Arşivlenen oturumda kotasyon gecikmesi kaydedildi.')).toBeInTheDocument()
+    expect(within(issue).getByText(/mevcut veri sağlığını göstermez/)).toBeInTheDocument()
     expect(within(region).queryByText('PAPER kaydı açılıyor…')).not.toBeInTheDocument()
   }
   await userEvent.click(row)

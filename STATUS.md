@@ -1,4 +1,4 @@
-# Durum — 2026-11-02
+# Durum — 2026-11-06
 
 Public kaynak depo: [berkerden/codexalsat](https://github.com/berkerden/codexalsat).
 Kararlı kaynak dalı main; canlı kullanım öncesi kalan işler issue #2'de izlenir.
@@ -19,30 +19,33 @@ operasyon geçmişi içermez. Üretim işlemleri kod içinde kapalıdır.
 - İleri paper gözlem kaydı: örneklenen sağlıklı kapsam ile takvim süresi ayrı,
   ayar/kod kimliği ve devralınmış geçmiş görünür; JSON rapor indirilebilir.
 
-## Son paket: gözlenen en büyük portföy düşüşü
+## Son paket: ayrıntılı paper veri sorunu kaydı
 
-Geçerli fiyatla işlem öncesi ve sonrası değerlemelerde, açık pozisyonlar ve
-kısmi satış maliyetleri dahil en büyük düşüş korunur. Fiyat toparlanınca anlık
-düşüş azalabilir, geçmiş maksimum silinmez. Mevcut değerleme ve risk eşikleri
-korunur. Geçersiz/eski fiyat ölçümü yenilemez; eski bilinmeyen geçmiş geriye
-üretilmez. Bu yalnız örneklenen değerlerin maksimumudur, gözlenmeyen aralık
-veya geçmiş mum içindeki gerçek maksimum değildir.
+Saat farkı, mum kalitesi/güncelliği, fiyat güncelliği, sembol kuralları ve
+veri alma aşaması hataları sabit açıklamalarla kaydedilir. Güncel/arşiv
+raporu son ayrıntılı sorunu ve tarihini gösterir; bu geçmiş olay kaydıdır,
+şimdiki sağlık veya düzelme kanıtı değildir. Eski genel hatadan neden üretilmez.
 
-Güncel/arşiv raporu fiyatın rapor anındaki yaşını ve eksik geçmişi gösterir.
-İlk geçerli değerleme öncesinde değer bilinmiyor olarak kalır. Yedek şema 4
-bu bilgiyi korur; şema 1/2/3 desteklenir.
+Tanı aynı oturum işlemi içinde yazılır. Tekrarlayan aynı hata birleştirilir;
+sağlıklı gözlem, yeniden başlatma veya yeni yetkilendirme sonrası tekrar ayrı
+olaydır. Yalnız son 100 tanı tutulur; diğer denetim geçmişi korunur. Saat
+gerilese de son eklenen geçerli kayıt kullanılır. Ham hata veya yanıt
+metinleri rapora yazılmaz. Mevcut risk/giriş/çıkış kararları korunur; bozuk
+sembol kuralları girişleri kapatır. Yedek biçimi değişmez.
 
-Yerel doğrulama: 471 backend testi başarılı, yerel PostgreSQL bulunmadığı için
-178 varyant atlandı; 30 arayüz ve 5 tarayıcı akışı geçti. Lint, strict tip,
-iki derleme ve gizli bilgi taraması başarılı. minimatch 11.0.1 güvenlik
-düzeltmesi sonrası arayüz paketi yeniden geçti; iki bağımlılık taraması temiz.
-Ayrı Astra/high son incelemesinde açık P1/P2 yok; hedefli 78 test başarılı,
-17 PostgreSQL varyantı atlandı. [İnceleme](docs/REVIEW_DRAWDOWN.md).
-Son commitin PostgreSQL ve CI kanıtı ilgili PR'da kaydedilir.
+Önceki PR #18 açık pozisyonlar dahil örneklenen en büyük düşüşü tamamladı;
+CI 649 backend, 30 arayüz ve 5 tarayıcı akışı geçti. Bu ölçüm gözlenmeyen
+aralığın/mum içinin gerçek maksimumunu bildiği anlamına gelmez.
 
-Geliştirme aynı clone'un ayrı worktree'sinde yapıldı. Bu paket çalışma
-sürümünü, giriş yetkisini veya risk ayarlarını kendiliğinden değiştirmez;
-canlı etkinleştirme, yeni deney veya gerçek hesap/borsa isteği içermez.
+Bu paket aynı clone'un geliştirme worktree'sinde, sentetik testlerle hazırlandı.
+Gerçek hesap, anahtar veya borsa isteği kullanılmadı; yeni deney/giriş yetkisi
+ve canlı etkinleştirme oluşturmaz. Son doğrulama ve bağımsız inceleme kanıtı
+[inceleme kaydında](docs/REVIEW_DIAGNOSTICS.md), son commit CI sonucu PR'dadır.
+
+Yerel sonuç: 486 backend başarılı / 178 PostgreSQL varyantı atlandı;
+32 arayüz ve 5 tarayıcı akışı geçti. Ayrı Astra/high son incelemesinde açık
+P1/P2 yok; temel sürüme karşı 1000 durum ve 6 işçi akışı karşılaştırıldı.
+Lint, tip, derleme, gizli bilgi ve bağımlılık kontrolleri başarılı.
 
 ## Kalan kabul koşulları
 

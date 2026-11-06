@@ -32,6 +32,21 @@ function percentage(value: string | null | undefined): string {
   return new Intl.NumberFormat('tr-TR', { style: 'percent', maximumFractionDigits: 2 }).format(ratio)
 }
 
+function DataIssueTime({ value }: { value: number }) {
+  const date = new Date(value)
+  if (!Number.isFinite(value) || Number.isNaN(date.getTime())) return <time>Zaman bilgisi geçersiz</time>
+  const label = new Intl.DateTimeFormat('tr-TR', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'UTC',
+    timeZoneName: 'short',
+  }).format(date)
+  return <time dateTime={date.toISOString()}>{label}</time>
+}
+
 const freshnessLabels: Record<PaperObservedDrawdownFreshness, string> = {
   unavailable: 'Kotasyon yok',
   fresh: 'Taze kotasyon',
@@ -113,6 +128,17 @@ export function PaperObservationPanel({ sessionId, archived = false, compact = f
       ) : report ? (
         <>
           <div className="observation-safety" role="status"><b>Canlı işleme uygun değil</b><span>Bu rapor 30 günlük koşulu, ekonomik avantajı veya canlı işlem onayını doğrulamaz.</span></div>
+          <section className={`observation-data-issue ${report.last_data_issue ? 'recorded' : 'unavailable'}`} aria-label="Son kaydedilen veri sorunu">
+            <div>
+              <b>Son kaydedilen veri sorunu</b>
+              {report.last_data_issue && <DataIssueTime value={report.last_data_issue.time} />}
+            </div>
+            {report.last_data_issue ? (
+              <><p>{report.last_data_issue.message}</p><small>Bu geçmiş bir kayıttır; mevcut veri sağlığını göstermez ve sorunun çözüldüğünü doğrulamaz.</small></>
+            ) : (
+              <><p>Ayrıntılı veri sorunu kaydı yok.</p><small>Önceki genel nedenlerden belirli bir veri sorunu çıkarılamaz; bu, hiç hata olmadığı anlamına gelmez.</small></>
+            )}
+          </section>
           <dl className="observation-times">
             <div><dt>Geçen takvim süresi</dt><dd>{duration(report.calendar_elapsed_ms)}</dd><small>Kapsama eşit değildir</small></div>
             <div><dt>Gözlem kayıt aralığı</dt><dd>{duration(report.observation_span_ms)}</dd><small>İlk kayıttan rapor anına</small></div>

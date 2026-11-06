@@ -8,7 +8,7 @@ import subprocess
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, cast
 
@@ -22,6 +22,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from spotlab import __version__
 from spotlab.contracts import INTERVAL_MS, Quote
 from spotlab.engine import (
+    DATA_ISSUE_MESSAGES,
     PaperArchiveNotFoundError,
     PaperConfig,
     PaperConflictError,
@@ -32,8 +33,10 @@ from spotlab.finance import CostModel
 from spotlab.market import (
     BinanceMarket,
     BinanceMarketStream,
+    DataQualityError,
     MarketDataError,
     ParquetStore,
+    StaleMarketData,
     is_fresh,
     validate_candles,
 )
@@ -56,6 +59,31 @@ TRUSTED_LOOPBACK_ORIGINS = frozenset(
         "http://localhost:8000",
     }
 )
+
+
+class PaperDataIssue(Exception):
+    """Internal fixed-code failure; exception details never enter the paper ledger."""
+
+    def __init__(self, issue_code: str) -> None:
+        if issue_code not in DATA_ISSUE_MESSAGES:
+            raise ValueError("Paper veri sorunu sınıflandırması geçersiz")
+        self.issue_code = issue_code
+        super().__init__(issue_code)
+
+
+async def paper_data_read(awaitable: Any, stage: str) -> Any:
+    if stage not in DATA_ISSUE_MESSAGES:
+        raise ValueError("Paper veri aşaması sınıflandırması geçersiz")
+    try:
+        return await awaitable
+    except DataQualityError as exc:
+        issue_code = "candle_quality" if stage == "latest" else stage
+        raise PaperDataIssue(issue_code) from exc
+    except StaleMarketData as exc:
+        issue_code = "quote_freshness" if stage in {"initial_quote", "refreshed_quote"} else stage
+        raise PaperDataIssue(issue_code) from exc
+    except (MarketDataError, OSError, ValueError, TimeoutError) as exc:
+        raise PaperDataIssue(stage) from exc
 
 
 def version() -> str:
@@ -513,7 +541,7 @@ async def paper_cycle(app: FastAPI) -> None:
     cfg = PaperConfig.model_validate(state["config"])
     observation_scope = "management" if state["position"] else "entry"
     try:
-        quote = await current_quote(app, cfg.symbol)
+        quote = await paper_data_read(current_quote(app, cfg.symbol), "initial_quote")
         if state["position"]:
             app.state.engine.tick(
                 quote,
@@ -527,18 +555,28 @@ async def paper_cycle(app: FastAPI) -> None:
             app.state.worker_error = None
             return
         info, clock, candles = await asyncio.gather(
-            app.state.market.exchange_info(cfg.symbol),
-            app.state.market.clock(),
-            app.state.market.latest(cfg.symbol, cfg.interval),
+            paper_data_read(app.state.market.exchange_info(cfg.symbol), "exchange_info"),
+            paper_data_read(app.state.market.clock(), "clock"),
+            paper_data_read(app.state.market.latest(cfg.symbol, cfg.interval), "latest"),
         )
         quality = validate_candles(candles, cfg.interval, now_ms=millis())
         try:
             step, minimum = filters(info)
-        except ValueError:
+        except (AttributeError, InvalidOperation, KeyError, TypeError, ValueError):
             step, minimum = D(0), D(-1)
-        signals = strategy_signal(candles, cfg.strategy)
+        try:
+            signals = strategy_signal(candles, cfg.strategy)
+        except ValueError as exc:
+            raise PaperDataIssue("generic_processing") from exc
         # Fetch again after slower entry prerequisites; no fill at an old pre-signal quote.
-        quote = await current_quote(app, cfg.symbol)
+        quote = await paper_data_read(current_quote(app, cfg.symbol), "refreshed_quote")
+        diagnostic_issue = (
+            "candle_quality"
+            if not quality.ok
+            else "clock_skew"
+            if not clock.synchronized
+            else None
+        )
         app.state.engine.tick(
             quote,
             signal=bool(signals[-1]) if signals else False,
@@ -546,18 +584,23 @@ async def paper_cycle(app: FastAPI) -> None:
             step=step,
             min_notional=minimum,
             healthy=quality.ok and clock.synchronized,
+            diagnostic_issue=diagnostic_issue,
             expected_session_id=expected_session_id,
             observation_scope="entry",
         )
         app.state.worker_error = None
     except PaperConflictError:
         return
-    except (MarketDataError, OSError, ValueError, TimeoutError):
+    except (PaperDataIssue, MarketDataError, OSError, ValueError, TimeoutError) as error:
+        issue_code = (
+            error.issue_code if isinstance(error, PaperDataIssue) else "generic_processing"
+        )
         try:
             app.state.engine.record_worker_failure(
                 observation_scope,
                 "Veri bağlantısı/kalitesi bozuldu; girişler durduruldu.",
                 expected_session_id=expected_session_id,
+                issue_code=issue_code,
             )
         except PaperConflictError:
             return
