@@ -187,6 +187,11 @@ export interface PaperObservationReport {
   calendar_elapsed_ms: number
   observation_span_ms: number
   observation: PaperObservationSummary | null
+  /** Optional only for compatibility with reports created before detailed data issues were recorded. */
+  last_data_issue?: {
+    time: number
+    message: string
+  } | null
   results: {
     scope: 'entire_paper_session'
     cash: string

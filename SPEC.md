@@ -139,6 +139,15 @@ penceresi karar zamanından önce bitmeli; örnekler örtüşmemeli. Benzerlik o
     korunur: nakit + miktar × bid × (1 − komisyon); varsayımsal çıkış kayması
     ayrıca düşülmez, gerçekleşen sanal dolumda uygulanır.
 
+18. Paper veri hataları, yalnız sabit ve izin verilen açıklamalarla oturuma
+    bağlı denetim kaydına yazılır. İstek aşaması ile doğrulanmış hata nedeni
+    ayrılır; ham hata metni, yanıt, adres veya hesap bilgisi kaydedilmez.
+    Tanı, mevcut risk/giriş/çıkış kararlarını değiştirmez. Son sorun raporu
+    geçmiş kaydıdır, güncel sağlık veya düzelme kanıtı değildir. Eski genel
+    hatadan ayrıntılı neden üretilmez. Saat gerilese de son eklenen kayıt
+    kullanılır; yalnız en yeni 100 tanı kaydı tutulur, diğer denetim geçmişi
+    korunur. Gecikmiş eski oturum sonucu yeni oturuma kayıt yazamaz.
+
 ## Aşama kabulü ve operasyon
 
 A0: gerçek GitHub deposu, ilk push, CI, secret taraması. Public depo ve CI geçen

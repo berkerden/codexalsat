@@ -168,6 +168,23 @@ OBSERVATION_KEYS = frozenset(
     }
 )
 OBSERVATION_CONTINUITY_KEYS = frozenset({"process_id", "at", "scope", "healthy"})
+DATA_ISSUE_MESSAGES = {
+    "quote_freshness": "Kotasyon güncel değil veya gelecekte zaman damgası taşıyor.",
+    "invalid_quote": "Kotasyon fiyatı, miktarı veya sembolü geçersiz.",
+    "symbol_rules": "Sembolün miktar ve minimum tutar kuralları doğrulanamadı.",
+    "clock_skew": "Bilgisayar saati ile borsa saati arasındaki fark sınırı aştı.",
+    "candle_quality": "Mum verisi kalite kontrollerini geçemedi.",
+    "candle_freshness": "Güncel, kapanmış mum verisi bulunamadı.",
+    "initial_quote": "İlk kotasyon alma aşaması başarısız oldu.",
+    "refreshed_quote": "Güncel kotasyonu yenileme aşaması başarısız oldu.",
+    "exchange_info": "Sembol bilgisi alma aşaması başarısız oldu.",
+    "clock": "Borsa saati alma aşaması başarısız oldu.",
+    "latest": "Mum verisi alma aşaması başarısız oldu.",
+    "generic_processing": "Piyasa verisi işleme aşaması başarısız oldu.",
+}
+DATA_ISSUE_EVENT = "data_issue"
+DATA_ISSUE_RETENTION = 100
+DATA_ISSUE_HINTS = frozenset({"clock_skew", "candle_quality"})
 SOURCE_FILES = (
     "engine.py",
     "main.py",
@@ -329,6 +346,71 @@ class PaperEngine:
     def _audit(state: dict[str, Any], event: str, message: str) -> None:
         state["audit"].append({"time": millis(), "event": event, "message": message})
 
+    @staticmethod
+    def _last_data_issue(state: dict[str, Any]) -> dict[str, Any] | None:
+        for event in reversed(state.get("audit", [])):
+            if (
+                isinstance(event, dict)
+                and event.get("event") == DATA_ISSUE_EVENT
+                and type(event.get("time")) is int
+                and event["time"] >= 0
+                and event.get("message") in DATA_ISSUE_MESSAGES.values()
+            ):
+                return {"time": event["time"], "message": event["message"]}
+        return None
+
+    def _record_data_issue(
+        self,
+        state: dict[str, Any],
+        issue_code: str,
+        at: int,
+        *,
+        previous_observation: dict[str, Any] | None,
+    ) -> None:
+        if issue_code not in DATA_ISSUE_MESSAGES:
+            raise ValueError("Paper veri sorunu sınıflandırması geçersiz")
+        message = DATA_ISSUE_MESSAGES[issue_code]
+        latest_index = None
+        latest_message = None
+        for index in range(len(state["audit"]) - 1, -1, -1):
+            event = state["audit"][index]
+            if (
+                isinstance(event, dict)
+                and event.get("event") == DATA_ISSUE_EVENT
+            ):
+                latest_index = index
+                latest_message = event.get("message")
+                break
+        rearmed = latest_index is not None and any(
+            isinstance(event, dict) and event.get("event") == "paper_start"
+            for event in state["audit"][latest_index + 1 :]
+        )
+        uninterrupted_duplicate = (
+            previous_observation is not None
+            and previous_observation.get("last_status") == "unhealthy"
+            and previous_observation.get("last_process_id") == self._process_id
+            and latest_message == message
+            and not rearmed
+        )
+        if uninterrupted_duplicate:
+            return
+        state["audit"].append(
+            {"time": at, "event": DATA_ISSUE_EVENT, "message": message}
+        )
+        issue_count = sum(
+            isinstance(event, dict) and event.get("event") == DATA_ISSUE_EVENT
+            for event in state["audit"]
+        )
+        remove = issue_count - DATA_ISSUE_RETENTION
+        if remove > 0:
+            retained = []
+            for event in state["audit"]:
+                if remove and isinstance(event, dict) and event.get("event") == DATA_ISSUE_EVENT:
+                    remove -= 1
+                    continue
+                retained.append(event)
+            state["audit"] = retained
+
     def start(
         self,
         config: PaperConfig,
@@ -402,10 +484,13 @@ class PaperEngine:
         *,
         expected_session_id: str,
         now: int | None = None,
+        issue_code: str | None = None,
     ) -> dict[str, Any]:
         """Atomically record a worker failure and revoke new-entry authority."""
         if scope not in OBSERVATION_SCOPES:
             raise ValueError("Paper gözlem kapsamı geçersiz")
+        if issue_code is not None and issue_code not in DATA_ISSUE_MESSAGES:
+            raise ValueError("Paper veri sorunu sınıflandırması geçersiz")
         at = millis() if now is None else now
         with self.transaction() as (_, state):
             self._expect_session(state, expected_session_id)
@@ -413,6 +498,14 @@ class PaperEngine:
                 raise PaperConflictError("Yapılandırılmamış paper oturumu gözlemlenemez.")
             state["entries_enabled"] = False
             state["reason"] = reason
+            previous_observation = state.get("observation")
+            if issue_code is not None:
+                self._record_data_issue(
+                    state,
+                    issue_code,
+                    at,
+                    previous_observation=previous_observation,
+                )
             self._record_observation(state, at, scope, False, "market_error")
             self._interrupt_observation(state, "stop")
             self._audit(state, "stop_entries", reason)
@@ -463,9 +556,12 @@ class PaperEngine:
         force_close: bool = False,
         expected_session_id: str | None = None,
         observation_scope: str | None = None,
+        diagnostic_issue: str | None = None,
     ) -> dict[str, Any]:
         if observation_scope is not None and observation_scope not in OBSERVATION_SCOPES:
             raise ValueError("Paper gözlem kapsamı geçersiz")
+        if diagnostic_issue is not None and diagnostic_issue not in DATA_ISSUE_MESSAGES:
+            raise ValueError("Paper veri sorunu sınıflandırması geçersiz")
         at = millis() if now is None else now
         with self.transaction() as (_, state):
             self._expect_session(state, expected_session_id)
@@ -480,6 +576,30 @@ class PaperEngine:
                 current_candle = (
                     candle_time > 0 and 0 <= at - candle_time <= INTERVAL_MS[cfg.interval] + 5000
                 )
+                issue_code = None
+                if observation_scope is not None:
+                    if not (0 <= at - quote.observed_at <= 5000):
+                        issue_code = "quote_freshness"
+                    elif not valid_quote:
+                        issue_code = "invalid_quote"
+                    elif observation_scope == "entry" and not valid_filters:
+                        issue_code = "symbol_rules"
+                    elif (
+                        observation_scope == "entry"
+                        and not healthy
+                        and diagnostic_issue in DATA_ISSUE_HINTS
+                    ):
+                        issue_code = diagnostic_issue
+                    elif observation_scope == "entry" and not current_candle:
+                        issue_code = "candle_freshness"
+                previous_observation = state.get("observation")
+                if issue_code is not None:
+                    self._record_data_issue(
+                        state,
+                        issue_code,
+                        at,
+                        previous_observation=previous_observation,
+                    )
                 if not valid_quote:
                     state["entries_enabled"] = False
                     state["reason"] = (
@@ -1444,6 +1564,7 @@ class PaperEngine:
                 else 0
             ),
             "observation": public_observation,
+            "last_data_issue": PaperEngine._last_data_issue(state),
             "results": {
                 "scope": "entire_paper_session",
                 "cash": state["cash"],
