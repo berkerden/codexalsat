@@ -58,6 +58,24 @@ def service_paths(root: Path) -> dict[str, Path]:
         "base": base,
         "manifest": base / "manifest.json",
         "plist": base / f"{LABEL}.plist",
+    }
+
+
+def _user_home() -> Path:
+    try:
+        home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve(strict=True)
+        metadata = home.stat()
+    except (KeyError, OSError) as exc:
+        raise ServiceError("Kullanıcı ana dizini doğrulanamadı.") from exc
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid():
+        raise ServiceError("Kullanıcı ana dizini güvenli değil.")
+    return home
+
+
+def log_paths(home: Path) -> dict[str, Path]:
+    base = home / "Library" / "Logs" / "SpotLab"
+    return {
+        "base": base,
         "stdout": base / "stdout.log",
         "stderr": base / "stderr.log",
     }
@@ -260,10 +278,7 @@ def _node_path(root: Path, home: Path) -> Path:
 
 
 def _runtime_environment(root: Path, data: Path) -> dict[str, str]:
-    try:
-        home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve(strict=True)
-    except (KeyError, OSError) as exc:
-        raise ServiceError("Kullanıcı ana dizini doğrulanamadı.") from exc
+    home = _user_home()
     node = _node_path(root, home)
     if ":" in str(node.parent):
         raise ServiceError("Node yolu PATH içinde güvenle kullanılamıyor.")
@@ -290,7 +305,12 @@ def _manifest(root: Path, revision: str, data: Path, keep_awake: bool) -> dict[s
     }
 
 
-def _plist(root: Path, paths: Mapping[str, Path], manifest: Mapping[str, Any]) -> dict[str, Any]:
+def _plist(
+    root: Path,
+    paths: Mapping[str, Path],
+    logs: Mapping[str, Path],
+    manifest: Mapping[str, Any],
+) -> dict[str, Any]:
     python = root / ".venv" / "bin" / "python"
     if not python.is_file() or not os.access(python, os.X_OK):
         raise ServiceError("Python ortamı bulunamadı; önce scripts/setup-local.sh çalıştırın.")
@@ -310,8 +330,8 @@ def _plist(root: Path, paths: Mapping[str, Path], manifest: Mapping[str, Any]) -
         "ExitTimeOut": 20,
         "Umask": 0o077,
         "AbandonProcessGroup": False,
-        "StandardOutPath": str(paths["stdout"]),
-        "StandardErrorPath": str(paths["stderr"]),
+        "StandardOutPath": str(logs["stdout"]),
+        "StandardErrorPath": str(logs["stderr"]),
     }
 
 
@@ -326,6 +346,28 @@ def _private_directory(path: Path) -> None:
     if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid():
         raise ServiceError("Özel servis dizini güvenli değil.")
     os.chmod(path, 0o700)
+
+
+def _owned_directory_without_chmod(path: Path) -> None:
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        raise ServiceError("Kullanıcı günlük dizini oluşturulamadı.") from exc
+    metadata = path.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid():
+        raise ServiceError("Kullanıcı günlük dizini güvenli değil.")
+
+
+def _log_directory(home: Path) -> Path:
+    library = home / "Library"
+    logs = library / "Logs"
+    _owned_directory_without_chmod(library)
+    _owned_directory_without_chmod(logs)
+    private_logs = logs / "SpotLab"
+    _private_directory(private_logs)
+    return private_logs
 
 
 def _local_state_directory(root: Path) -> Path:
@@ -351,6 +393,19 @@ def _safe_existing_file(path: Path) -> None:
         return
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid():
         raise ServiceError("Özel servis dosyası güvenli değil.")
+
+
+def _open_private_log(path: Path) -> None:
+    _safe_existing_file(path)
+    flags = os.O_CREAT | os.O_APPEND | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid():
+            raise ServiceError("Servis günlük dosyası güvenli değil.")
+        os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
 
 
 def _private_file(path: Path, content: bytes) -> None:
@@ -419,22 +474,16 @@ def start(root: Path, env: Mapping[str, str], *, keep_awake: bool, accept: bool)
             )
     data = _data_for_start(root, previous, env)
     candidate = _manifest(root, revision, data, keep_awake)
-    plist = _plist(root, paths, candidate)
+    home = _user_home()
+    logs = log_paths(home)
+    plist = _plist(root, paths, logs, candidate)
 
     if _local_state_directory(root) != paths["base"]:
         raise ServiceError("Yerel servis dizini doğrulanamadı.")
+    if _log_directory(home) != logs["base"]:
+        raise ServiceError("Servis günlük dizini doğrulanamadı.")
     for log_name in ("stdout", "stderr"):
-        log_path = paths[log_name]
-        _safe_existing_file(log_path)
-        flags = os.O_CREAT | os.O_APPEND | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(log_path, flags, 0o600)
-        try:
-            metadata = os.fstat(fd)
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid():
-                raise ServiceError("Servis günlük dosyası güvenli değil.")
-            os.fchmod(fd, 0o600)
-        finally:
-            os.close(fd)
+        _open_private_log(logs[log_name])
     _private_file(paths["plist"], plistlib.dumps(plist, fmt=plistlib.FMT_XML, sort_keys=True))
     old_manifest = None
     if previous is not None:
@@ -476,6 +525,7 @@ def stop() -> None:
 
 def status(root: Path) -> None:
     paths = service_paths(root.resolve())
+    logs = log_paths(_user_home())
     manifest = _load_manifest(paths["manifest"])
     try:
         result = _run(("launchctl", "print", service_target()))
@@ -486,6 +536,7 @@ def status(root: Path) -> None:
         "label": LABEL,
         "global_job": global_job,
         "local_manifest": "present" if manifest is not None else "absent",
+        "logs_dir": str(logs["base"]),
     }
     if manifest is not None:
         configured_root = Path(str(manifest["repo_root"]))
