@@ -12,6 +12,45 @@ Panelde giriş durdurma ile pozisyon kapatma ayrı işlemdir. Kapatma isteği ö
 kalıcı yazılır, sonra yeni kotasyonda kalan miktar için sürdürülür. Motor kapanırsa
 simülasyon çıkışı bekler; gerçek borsa koruması varmış gibi yorumlanamaz.
 
+## Mac üzerinde uzun sanal gözlem
+
+Ön planda çalışan yerel başlatıcının isteğe bağlı uyku koruması vardır:
+
+```bash
+bash scripts/run-local.sh --keep-awake
+```
+
+Bu komutu mevcut sunucuların yanında ikinci kez çalıştırmayın. Başlatıcı gerekli
+çalıştırıcıları ve panel dosyasını kontrol eder; 8000 veya 5173 portu kullanımda
+ise sunucuları başlatmadan hata verir. Mevcut süreci kendiliğinden kapatmaz.
+Port kontrolü bir anlık kontroldür; başka programın hemen sonra aynı portu
+almasını engellemez. API/panel süreçlerinden biri durursa diğeri de kapatılır.
+
+macOS'un `caffeinate -i -w` aracı, yalnız başlatıcı çalışırken boşta sistem
+uykusunu önlemeyi ister. Ekranın kapanmasını engellemez ve kalıcı güç ayarı
+değiştirmez. Koruma süreci başlatılamazsa veya beklenmedik şekilde durursa
+başlatıcı hata verip sunucuları kapatır. `Ctrl+C`, terminal kapanması veya
+durdurma sinyalinde başlatıcının açtığı süreçlere sonlandırma isteği gönderilir
+ve kapanmaları beklenir. Sonlandırma isteğine yanıt vermeyen bir süreç bu
+beklemeyi uzatabilir; başlatıcı zorla öldürme zaman aşımı uygulamaz.
+macOS dışında bu seçenek açık bir hatayla reddedilir; normal `run-local.sh`
+başlatması uyku koruması istemez.
+
+Uzun gözlemde kapağı açık tutun, güç kaynağını bağlayın ve terminali kapatmayın.
+Kapak kapatma, elle uyutma, yeniden başlatma, elektrik veya internet kesintisi
+bu korumanın kapsamı dışındadır. Süreçlerin çalışması sağlıklı veri veya borsa
+bağlantısı kanıtı değildir; Paper gözlem raporundaki son kayıt, sağlıklı kapsam
+ve veri sorununu ayrıca kontrol edin. Süreç içi takılma bu başlatıcıyla
+algılanmaz; bu bir gözetimsiz işletim sistemi servisi değildir.
+
+Kesintiden sonra önce kayıtlı pozisyonları ve veri sorununu inceleyin. Uygulamayı
+aynı veri diziniyle yeniden başlatın; açık sanal pozisyonların yönetimi güncel
+kotasyon geldiğinde sürer. Yeni sanal girişler kendiliğinden açılmaz; süreli
+yetkilendirme kullanıcı eylemidir. Başlatıcı otomatik yeniden başlatma, Testnet
+izleyicisi başlatma veya yetki yenileme yapmaz. Sunucuların durması açık
+pozisyonları kapatmaz. Sürekli işletim için ayrı servis/sunucu kabul koşulları
+bu paketle tamamlanmış sayılmaz.
+
 ## Ayrı paper deneyi
 
 Mevcut paper oturumunun sembol, periyot ve risk kapsamı sabittir. Farklı bir

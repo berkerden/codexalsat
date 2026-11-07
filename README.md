@@ -26,6 +26,19 @@ Tarayıcı kapansa da backend çalışır. Terminal kapandığında, bilgisayar 
 veya süreç çöktüğünde yerel paper yönetimi durabilir. Yeniden başlatma girişleri
 kendiliğinden açmaz. Durdurmak için `Ctrl+C`; açık paper pozisyonları kayıtta korunur.
 
+Mac'te uzun sanal gözlem için isteğe bağlı başlatma:
+
+```bash
+bash scripts/run-local.sh --keep-awake
+```
+
+Bu seçenek yalnız uygulama açıkken boşta sistem uykusunu önlemeyi ister;
+ekran kapanabilir. Kapağı açık, bilgisayarı güç kaynağına bağlı tutun.
+Kapak kapatma, elle uyutma, kapanma ve bağlantı kesintisi için çalışma garantisi
+vermez. Terminal açık kalmalıdır. Uyku koruması beklenmedik şekilde durursa
+başlatıcı hata vererek sunucuları da kapatır. Ayrıntılar ve yeniden başlatma
+adımları [operasyon belgesinde](docs/OPERATIONS.md#mac-üzerinde-uzun-sanal-gözlem).
+
 ## Kullanım
 
 1. Genel bakışta parite ve mum periyodunu seçin. Mum grafiği, kotasyon, veri kalitesi

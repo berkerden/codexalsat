@@ -1,4 +1,4 @@
-# Durum — 2026-11-06
+# Durum — 2026-11-07
 
 Public kaynak depo: [berkerden/codexalsat](https://github.com/berkerden/codexalsat).
 Kararlı kaynak dalı main; canlı kullanım öncesi kalan işler issue #2'de izlenir.
@@ -19,7 +19,29 @@ operasyon geçmişi içermez. Üretim işlemleri kod içinde kapalıdır.
 - İleri paper gözlem kaydı: örneklenen sağlıklı kapsam ile takvim süresi ayrı,
   ayar/kod kimliği ve devralınmış geçmiş görünür; JSON rapor indirilebilir.
 
-## Son paket: ayrıntılı paper veri sorunu kaydı
+## Son paket: yerel gözlem başlatıcısı
+
+`bash scripts/run-local.sh --keep-awake`, macOS'ta başlatıcı ömrüne bağlı
+boşta sistem uykusunu önleme isteği oluşturur. Kalıcı güç ayarı veya işletim
+sistemi servisi kurmaz. Kapak kapatma, elle uyutma, elektrik/ağ kesintisi ve
+süreç içi takılma için kesintisiz çalışma garantisi değildir.
+
+Başlatma öncesinde Python/Node/Vite ve iki yerel port kontrol edilir. Kullanımda
+olan portta yeni backend açılmaz; mevcut süreç sonlandırılmaz. Sunuculardan
+biri veya istenmiş uyku koruması durduğunda başlatıcı hata vererek diğerlerini
+kapatır. Otomatik yeniden başlatma veya işlem yetkisi yenileme yapılmaz.
+Sanal/borsa işlemlerinin kararları ve kayıt biçimleri değişmez.
+
+Yerel macOS doğrulamasında geçici bir süreç için `PreventUserIdleSystemSleep`
+isteği görüldü; izlenen süreç bitince koruma da kapandı. Bu doğrulama uygulama
+verisi, gerçek emir veya yeni sanal oturum kullanmadı.
+
+Yeni başlatıcı için 15 yalıtılmış süreç testi macOS Bash 3.2 ile geçti; iki
+dolu port, hızlı yeniden başlatma, sinyalle kapanış ve koruma/sunucu hataları
+kontrol edildi. Ayrı Astra/high incelemesinde bu kapsamda açık P1/P2 bulunmadı.
+Tam CI sonucu ilgili PR'dadır; bu çalışma canlı kullanım uygunluğu incelemesi değildir.
+
+## Önceki paket: ayrıntılı paper veri sorunu kaydı
 
 Saat farkı, mum kalitesi/güncelliği, fiyat güncelliği, sembol kuralları ve
 veri alma aşaması hataları sabit açıklamalarla kaydedilir. Güncel/arşiv
