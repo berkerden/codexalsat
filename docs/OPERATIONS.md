@@ -51,6 +51,71 @@ izleyicisi başlatma veya yetki yenileme yapmaz. Sunucuların durması açık
 pozisyonları kapatmaz. Sürekli işletim için ayrı servis/sunucu kabul koşulları
 bu paketle tamamlanmış sayılmaz.
 
+## Terminalden bağımsız Mac oturumu
+
+Mevcut SQLite sanal hesabı, açık Mac kullanıcı oturumunda `launchd` altında
+çalıştırabilirsiniz. Önce ön plandaki sunucuları durdurun; kaynak klasöründe:
+
+```bash
+.venv/bin/python scripts/macos_service.py start --keep-awake
+.venv/bin/python scripts/macos_service.py status
+```
+
+Başlatma komutu tamamlandığında terminal kapanabilir. `--keep-awake` her
+başlatmada ayrıca seçilir; ön plandaki başlatıcıyla aynı boşta sistem uykusu
+isteğini kullanır. Kapak kapatma veya elle uyutmayı önlemez. Kullanıcı
+oturumundan çıkış veya yeniden açılış sonrasında açık başlatma komutu gerekir.
+Bu paket oturum açılışına otomatik başlatma kaydı, root servisi veya çökme
+sonrasında otomatik yeniden deneme kurmaz.
+
+İlk başlatma temiz kaynak sürümünü ve mutlak veri klasörünü kaydeder. Mevcut,
+geçerli paper durum kaydı içeren `paper.sqlite` gerekir; bu komut yeni deney veya boş hesap
+oluşturmaz. `SPOTLAB_DATA_DIR` verilmişse ilk başlatmada o klasör sabitlenir;
+sonraki başlatmalar kayıtlı klasörü kullanır ve çelişen seçimleri reddeder.
+Kayıtlı klasörün sonradan başka yere yönlendirilmesi ve önceden varlığı
+kaydedilmiş Testnet defterinin kaybolması başlatmayı engeller.
+PostgreSQL/özel veritabanı bağlantıları ve desteklenmeyen ortam ayarları bu
+komutta açık hatayla reddedilir; sessizce varsayılan hesaba dönülmez.
+
+Başlatmadan önce ve arka plan işi açılırken kaynak ve veri kontrolleri
+uygulanır. Çalışma sırasında bu kaynak klasörünü değiştirmeyin; sürüm kontrolü
+dosyaların veya bağımlılıkların değişmesini kilitlemez. `start` başarısı
+başlatma talebinin kabul edildiğini gösterir; piyasa verisinin sağlığını veya
+işlem yetkisini kanıtlamaz. `status` içindeki servis kaydı da sürecin hâlâ
+çalıştığı anlamına gelmez. Panel erişimini, son gözlemi ve veri sorunlarını
+ayrıca kontrol edin.
+
+Durdurmak için:
+
+```bash
+.venv/bin/python scripts/macos_service.py stop
+```
+
+Bu komut yalnız mevcut kullanıcının SpotLab arka plan servisini hedefler;
+başka proje klasöründen çağrılsa da aynı servisi durdurur. Veri kayıtlarını
+silmez ve pozisyon kapatma emri vermez. macOS önce sonlandırma ister; 20
+saniye içinde bitmeyen işi zorla sonlandırabilir. Sanal pozisyon yönetimi
+uygulama yeniden çalışana kadar kesilir. Borsadaki mevcut emirlerin durumunu
+ayrıca doğrulayın.
+
+Kesinti sonrası kayıtları inceleyin, `stop` ile servis kaydını kaldırın ve
+aynı kaynak sürümünde tekrar `start --keep-awake` kullanın. Yeni sanal girişler
+kapalı açılır; Testnet izleyicisi otomatik başlamaz. Kayıtlı sürüm değişmişse
+normal başlatma reddedilir. Güncelleme için önce durdurun, yedek alın, seçilmiş
+temiz sürümü hazırlayın; ardından sürüm değişimini açıkça kabul edin:
+
+```bash
+.venv/bin/python scripts/macos_service.py start --keep-awake --accept-current-version
+```
+
+Bu seçenek kayıtlı veri klasörünü değiştirmez. Yüklenmiş servis varken sürüm
+kaydı değiştirilmez. Servis yapılandırması ve günlükleri `data/service`
+altında kişiye özel izinlerle saklanır; Git'e yüklenmez. Günlükler otomatik
+döndürülmez; boyutlarını izleyin ve gerektiğinde servis durmuşken özel yedek
+klasörüne taşıyın. Günlükleri veya hesap dosyalarını public hata bildirimine
+eklemeyin. Bu paket süreç içi takılma algılama, kesintisiz sunucu işletimi ve
+30 günlük sağlıklı gözlem kabul koşullarını tamamlamaz.
+
 ## Ayrı paper deneyi
 
 Mevcut paper oturumunun sembol, periyot ve risk kapsamı sabittir. Farklı bir
@@ -111,7 +176,7 @@ gözlem penceresine ait getiri diye yorumlanmaz. Raporun 30 gün açık kalması
 veya birkaç kârlı işlem canlı uygunluğu sağlamaz. En az 30 takvim günlük ileri
 gözlem hedefi, kapsama ve kesintiler, yeterli bağımsız işlem, maliyet stresi ve
 ekonomik avantaj ayrıca değerlendirilir. Canlı kilidi bu raporla açılmaz.
-Bu paket arka plan işletim sistemi servisi veya otomatik bildirim kurmaz.
+Gözlem raporu arka plan servisini veya otomatik bildirimi kendiliğinden başlatmaz.
 
 ## Son kaydedilen veri sorunu
 

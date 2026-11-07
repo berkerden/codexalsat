@@ -4,8 +4,8 @@ set -eu
 python3 scripts/secret_scan.py --all
 
 if [ -d backend/src ]; then
-  python3 -m ruff check backend/src backend/tests
-  python3 -m mypy backend/src
+  python3 -m ruff check backend/src backend/tests scripts/macos_service.py
+  python3 -m mypy backend/src scripts/macos_service.py
   python3 -m pytest
 fi
 
