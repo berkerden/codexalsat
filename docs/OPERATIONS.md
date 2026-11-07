@@ -109,9 +109,12 @@ temiz sürümü hazırlayın; ardından sürüm değişimini açıkça kabul edi
 ```
 
 Bu seçenek kayıtlı veri klasörünü değiştirmez. Yüklenmiş servis varken sürüm
-kaydı değiştirilmez. Servis yapılandırması ve günlükleri `data/service`
-altında kişiye özel izinlerle saklanır; Git'e yüklenmez. Günlükler otomatik
-döndürülmez; boyutlarını izleyin ve gerektiğinde servis durmuşken özel yedek
+kaydı değiştirilmez. Servis yapılandırması `data/service` altında, günlükleri
+ise `~/Library/Logs/SpotLab` içinde kişiye özel izinlerle saklanır; Git'e
+yüklenmez. macOS arka plan yöneticisi Documents altındaki günlük dosyalarını
+açamayabildiği için günlükler standart kullanıcı günlük alanına yazılır.
+Kaynak ve hesap dosyalarının yeri değişmez. Günlükler otomatik döndürülmez;
+boyutlarını izleyin ve gerektiğinde servis durmuşken özel yedek
 klasörüne taşıyın. Günlükleri veya hesap dosyalarını public hata bildirimine
 eklemeyin. Bu paket süreç içi takılma algılama, kesintisiz sunucu işletimi ve
 30 günlük sağlıklı gözlem kabul koşullarını tamamlamaz.

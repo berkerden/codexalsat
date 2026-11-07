@@ -8,7 +8,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -46,6 +46,18 @@ def service() -> ModuleType:
 @pytest.fixture(autouse=True)
 def macos_platform(service: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(service.sys, "platform", "darwin")
+
+
+@pytest.fixture(autouse=True)
+def fake_user_home(
+    service: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Path:
+    home = tmp_path / "home"
+    (home / "Library" / "Logs").mkdir(parents=True)
+    monkeypatch.setattr(
+        service.pwd, "getpwuid", lambda uid: SimpleNamespace(pw_dir=str(home))
+    )
+    return home.resolve()
 
 
 @pytest.fixture
@@ -309,15 +321,24 @@ def test_uncertain_rollback_preserves_candidate_manifest(service, fake_repo, mon
     assert candidate["revision"] == "a" * 40
 
 
-def test_private_files_and_safe_plist(service, fake_repo, monkeypatch) -> None:
+def test_private_files_and_safe_plist(
+    service, fake_repo, fake_user_home, monkeypatch
+) -> None:
     root, _ = fake_repo
     prepare_start(service, monkeypatch, root)
     service.start(root, {}, keep_awake=False, accept=False)
     paths = service.service_paths(root)
+    logs = service.log_paths(fake_user_home)
 
     assert paths["base"].stat().st_mode & 0o777 == 0o700
-    for name in ("manifest", "plist", "stdout", "stderr"):
+    for name in ("manifest", "plist"):
         assert paths[name].stat().st_mode & 0o777 == 0o600
+    assert logs["base"].stat().st_mode & 0o777 == 0o700
+    for name in ("stdout", "stderr"):
+        assert logs[name].stat().st_mode & 0o777 == 0o600
+        assert logs[name].parent == fake_user_home / "Library" / "Logs" / "SpotLab"
+    assert not (paths["base"] / "stdout.log").exists()
+    assert not (paths["base"] / "stderr.log").exists()
     plist = plistlib.loads(paths["plist"].read_bytes())
     assert plist["RunAtLoad"] is False
     assert plist["KeepAlive"] is False
@@ -330,10 +351,42 @@ def test_private_files_and_safe_plist(service, fake_repo, monkeypatch) -> None:
         "_run",
         str(paths["manifest"]),
     ]
+    assert plist["StandardOutPath"] == str(logs["stdout"])
+    assert plist["StandardErrorPath"] == str(logs["stderr"])
     assert "EnvironmentVariables" in plist
     assert not {"SPOTLAB_TESTNET_API_KEY", "SPOTLAB_TESTNET_API_SECRET"} & set(
         plist["EnvironmentVariables"]
     )
+
+
+def test_log_setup_preserves_shared_directory_modes(
+    service, fake_repo, fake_user_home, monkeypatch
+) -> None:
+    root, _ = fake_repo
+    library = fake_user_home / "Library"
+    shared_logs = library / "Logs"
+    library.chmod(0o755)
+    shared_logs.chmod(0o711)
+    prepare_start(service, monkeypatch, root)
+
+    service.start(root, {}, keep_awake=False, accept=False)
+
+    assert library.stat().st_mode & 0o777 == 0o755
+    assert shared_logs.stat().st_mode & 0o777 == 0o711
+    assert service.log_paths(fake_user_home)["base"].stat().st_mode & 0o777 == 0o700
+
+
+def test_log_directory_symlink_is_rejected(
+    service, fake_repo, fake_user_home, monkeypatch, tmp_path: Path
+) -> None:
+    root, _ = fake_repo
+    target = tmp_path / "redirected-logs"
+    target.mkdir()
+    service.log_paths(fake_user_home)["base"].symlink_to(target, target_is_directory=True)
+    prepare_start(service, monkeypatch, root)
+
+    with pytest.raises(service.ServiceError, match="güvenli değil"):
+        service.start(root, {}, keep_awake=False, accept=False)
 
 
 def test_external_data_allows_missing_local_data_directory(
@@ -355,11 +408,13 @@ def test_external_data_allows_missing_local_data_directory(
 
 
 def test_status_is_read_only_and_does_not_expose_launchctl_output(
-    service, fake_repo, monkeypatch, capsys
+    service, fake_repo, fake_user_home, monkeypatch, capsys
 ) -> None:
     root, _ = fake_repo
     paths = service.service_paths(root)
+    logs = service.log_paths(fake_user_home)
     assert not paths["base"].exists()
+    assert not logs["base"].exists()
     raw = "private launchctl environment should not be printed"
     monkeypatch.setattr(
         service, "_run", lambda argv, **kwargs: completed(tuple(argv), 1, raw)
@@ -369,9 +424,11 @@ def test_status_is_read_only_and_does_not_expose_launchctl_output(
 
     output = capsys.readouterr().out
     assert not paths["base"].exists()
+    assert not logs["base"].exists()
     assert raw not in output
     assert json.loads(output)["global_job"] == "not-confirmed"
     assert json.loads(output)["local_manifest"] == "absent"
+    assert json.loads(output)["logs_dir"] == str(logs["base"])
 
 
 def test_status_treats_launchctl_timeout_as_unknown(

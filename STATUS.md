@@ -32,7 +32,11 @@ Mevcut paper kaydı salt okunur kontrol edilir. Başlatıcı yalnız kullanıcı
 oturumundaki tek SpotLab servisini yönetir; günlük ve yapılandırma yereldir.
 Yeni sanal giriş yetkisi veya Testnet izleyicisi kendiliğinden başlatılmaz.
 
-25 odak test, lint ve tip kontrolü geçti. Ayrı Astra/high incelemesinde açık
+macOS'un Documents altına arka plan günlüğü yazmayı reddedebildiği doğrulandı.
+Günlükler özel `~/Library/Logs/SpotLab` dizininde, yapılandırma ise mevcut
+`data/service` dizininde tutulur; kaynak ve hesap verisi taşınmaz.
+
+27 odak test, lint ve tip kontrolü geçti. Ayrı Astra/high incelemesinde açık
 P1/P2 kalmadı. Native macOS geçici servis denemesinde komut bittikten sonra
 çalışmanın sürmesi, normal durdurma/çökmede alt süreç temizliği, açık sürüm
 kabulü ve kayıp veritabanında yeni hesap açılmaması doğrulandı. Yapay
