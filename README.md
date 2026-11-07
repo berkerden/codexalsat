@@ -18,9 +18,8 @@ bash scripts/run-local.sh
 
 Panel: <http://127.0.0.1:5173> · API: <http://127.0.0.1:8000/docs>
 
-Bu makinedeki kaynak klasörü:
-`/Users/berkerden/Documents/Codex/Binance Alsat Botu`.
-Bu klasörde tekrar clone yapmayın; mevcut clone kullanılmalıdır.
+Proje bilgisayarınızda zaten varsa mevcut kaynak klasörünü kullanın;
+aynı proje için yeniden clone oluşturmayın.
 
 Tarayıcı kapansa da backend çalışır. Terminal kapandığında, bilgisayar uyuduğunda
 veya süreç çöktüğünde yerel paper yönetimi durabilir. Yeniden başlatma girişleri
@@ -38,6 +37,21 @@ Kapak kapatma, elle uyutma, kapanma ve bağlantı kesintisi için çalışma gar
 vermez. Terminal açık kalmalıdır. Uyku koruması beklenmedik şekilde durursa
 başlatıcı hata vererek sunucuları da kapatır. Ayrıntılar ve yeniden başlatma
 adımları [operasyon belgesinde](docs/OPERATIONS.md#mac-üzerinde-uzun-sanal-gözlem).
+
+Mac'te mevcut sanal hesabı terminalden bağımsız çalıştırmak için:
+
+```bash
+.venv/bin/python scripts/macos_service.py start --keep-awake
+.venv/bin/python scripts/macos_service.py status
+```
+
+Bu yöntem Mac kullanıcı oturumuna bağlıdır; başlatma komutu bittikten sonra
+terminal kapanabilir. Kapağın kapanması, uyku ve oturumdan çıkış çalışmayı
+kesebilir. Mevcut sunucuları önce durdurun. Seçilen temiz kaynak sürümü ve veri
+klasörü kaydedilir; yeni bir boş hesap oluşturulmaz. Durdurmak için
+`.venv/bin/python scripts/macos_service.py stop` kullanın. Kesinti sonrası
+aynı sürümle yeniden başlatma ve sürüm güncelleme adımları
+[operasyon belgesinde](docs/OPERATIONS.md#terminalden-bağımsız-mac-oturumu).
 
 ## Kullanım
 
@@ -72,8 +86,8 @@ USDT kotasyon tutarı, risksiz veya bire bir USD nakit garantisi değildir.
 ```bash
 source .venv/bin/activate
 python -m pytest
-python -m ruff check backend/src backend/tests
-python -m mypy backend/src
+python -m ruff check backend/src backend/tests scripts/macos_service.py
+python -m mypy backend/src scripts/macos_service.py
 python scripts/secret_scan.py --staged
 python -m pip_audit
 source scripts/node-env.sh

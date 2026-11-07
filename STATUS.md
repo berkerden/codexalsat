@@ -19,7 +19,26 @@ operasyon geçmişi içermez. Üretim işlemleri kod içinde kapalıdır.
 - İleri paper gözlem kaydı: örneklenen sağlıklı kapsam ile takvim süresi ayrı,
   ayar/kod kimliği ve devralınmış geçmiş görünür; JSON rapor indirilebilir.
 
-## Son paket: yerel gözlem başlatıcısı
+## Son paket: terminalden bağımsız Mac oturumu
+
+Mevcut SQLite sanal hesabı, açık Mac kullanıcı oturumunda `launchd` ile
+başlatma/durum/durdurma komutlarıyla yönetilir. Terminal kapanabilir; kullanıcı
+oturumundan çıkış, kapak kapatma veya uyku çalışmayı kesebilir. Otomatik
+yeniden başlatma ve oturum açılışında otomatik çalışma yoktur.
+
+Kaynak sürümü ve veri dizini sabitlenir. Değişmiş sürüm için durmuş serviste
+açık kabul gerekir; veri yolu sessizce değişmez, boş hesap oluşturulmaz.
+Mevcut paper kaydı salt okunur kontrol edilir. Başlatıcı yalnız kullanıcı
+oturumundaki tek SpotLab servisini yönetir; günlük ve yapılandırma yereldir.
+Yeni sanal giriş yetkisi veya Testnet izleyicisi kendiliğinden başlatılmaz.
+
+25 odak test, lint ve tip kontrolü geçti. Ayrı Astra/high incelemesinde açık
+P1/P2 kalmadı. Native macOS geçici servis denemesinde komut bittikten sonra
+çalışmanın sürmesi, normal durdurma/çökmede alt süreç temizliği, açık sürüm
+kabulü ve kayıp veritabanında yeni hesap açılmaması doğrulandı. Yapay
+veritabanı başlatma ön kontrolünde değişmedi. Tam CI sonucu ilgili PR'dadır.
+
+## Önceki paket: yerel gözlem başlatıcısı
 
 `bash scripts/run-local.sh --keep-awake`, macOS'ta başlatıcı ömrüne bağlı
 boşta sistem uykusunu önleme isteği oluşturur. Kalıcı güç ayarı veya işletim
@@ -77,7 +96,7 @@ Lint, tip, derleme, gizli bilgi ve bağımlılık kontrolleri başarılı.
   envanter; araştırmada mum içi portföy düşüşü bu paketle tamamlanmış değildir.
 - En az 30 takvim günü ileri paper gözlem, yeterli bağımsız örneklem dışı kanıt,
   maliyet stresi ve piyasa koşulları. Yazılım testleri ekonomik avantaj değildir.
-- Gözetimsiz servis, fiziksel PostgreSQL kurtarma, Docker ve güvenli uzak işletim
+- Gözetimsiz süreç sağlığı/kurtarma, fiziksel PostgreSQL kurtarma, Docker ve güvenli uzak işletim
   doğrulaması; son bağımsız üretim incelemesi ve uygulama içi açık kullanıcı onayı.
 
 Kurulum ve kurtarma: [OPERATIONS.md](docs/OPERATIONS.md).
