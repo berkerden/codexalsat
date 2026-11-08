@@ -3,8 +3,12 @@
 import asyncio
 import contextlib
 import json
+import math
 import os
+import re
 import subprocess
+import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -59,6 +63,25 @@ TRUSTED_LOOPBACK_ORIGINS = frozenset(
         "http://localhost:8000",
     }
 )
+WORKER_STALL_SECONDS = 300.0
+SERVICE_INSTANCE_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
+
+
+def service_instance_id() -> str:
+    configured = os.getenv("SPOTLAB_SERVICE_INSTANCE_ID", "")
+    if SERVICE_INSTANCE_ID_PATTERN.fullmatch(configured):
+        return configured.lower()
+    return uuid.uuid4().hex
+
+
+def monotonic_age(now: float, timestamp: Any) -> float | None:
+    if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
+        return None
+    value = float(timestamp)
+    age = now - value
+    if not math.isfinite(value) or not math.isfinite(age) or age < 0:
+        return None
+    return age
 
 
 class PaperDataIssue(Exception):
@@ -162,9 +185,12 @@ def create_app(database_url: str | None = None, *, run_worker: bool = True) -> F
         os.getenv("CORS_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173").split(",")
     )
     allowed_origins = sorted(configured_origins | TRUSTED_LOOPBACK_ORIGINS)
+    instance_id = service_instance_id()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        app.state.service_started_monotonic = time.monotonic()
+        app.state.service_instance_id = instance_id
         app.state.engine = PaperEngine(db_url)
         app.state.market = BinanceMarket()
         app.state.store = ParquetStore(data_dir / "market")
@@ -173,12 +199,18 @@ def create_app(database_url: str | None = None, *, run_worker: bool = True) -> F
         app.state.stream_task = None
         app.state.stream_status = "not_connected"
         app.state.worker_error = None
+        app.state.worker_task = None
+        app.state.worker_cycle_in_progress = False
+        app.state.worker_cycle_started_monotonic = None
+        app.state.worker_last_progress_monotonic = None
+        app.state.worker_data_degraded = False
         app.state.research_lock = asyncio.Lock()
         app.state.background_enabled = run_worker
         app.state.testnet_panel = TestnetPanel(
             testnet_db_url, data_dir / "testnet-credentials.json"
         )
-        worker = asyncio.create_task(paper_loop(app)) if run_worker else None
+        app.state.worker_task = asyncio.create_task(paper_loop(app)) if run_worker else None
+        worker = app.state.worker_task
         try:
             yield
         finally:
@@ -284,6 +316,56 @@ def create_app(database_url: str | None = None, *, run_worker: bool = True) -> F
                 "sleep_stops_bot": True,
                 "daily_timezone": "UTC",
                 "real_order_transport": False,
+            },
+        }
+
+    @app.get("/api/health")
+    async def health() -> dict[str, Any]:
+        now = time.monotonic()
+        uptime = monotonic_age(now, app.state.service_started_monotonic)
+        # The lifespan timestamp comes from the same monotonic clock. Keep the wire
+        # contract finite even if a test or platform clock is unexpectedly corrupted.
+        if uptime is None:
+            uptime = 0.0
+
+        task: asyncio.Task[None] | None = app.state.worker_task
+        enabled = bool(app.state.background_enabled)
+        task_alive = task is not None and not task.done()
+        stored_in_progress = bool(app.state.worker_cycle_in_progress)
+        cycle_in_progress = enabled and task_alive and stored_in_progress
+        last_progress_age = monotonic_age(now, app.state.worker_last_progress_monotonic)
+        cycle_age = (
+            monotonic_age(now, app.state.worker_cycle_started_monotonic)
+            if cycle_in_progress
+            else None
+        )
+
+        if not enabled:
+            worker_state = "disabled"
+        elif not task_alive:
+            worker_state = "stopped"
+        elif app.state.worker_last_progress_monotonic is None and not stored_in_progress:
+            worker_state = "starting"
+        elif (
+            last_progress_age is None
+            or last_progress_age > WORKER_STALL_SECONDS
+            or (cycle_in_progress and (cycle_age is None or cycle_age > WORKER_STALL_SECONDS))
+        ):
+            worker_state = "stalled"
+        else:
+            worker_state = "running"
+
+        return {
+            "schema_version": 1,
+            "instance_id": app.state.service_instance_id,
+            "backend_pid": os.getpid(),
+            "uptime_seconds": uptime,
+            "worker": {
+                "state": worker_state,
+                "cycle_in_progress": cycle_in_progress,
+                "last_progress_age_seconds": last_progress_age,
+                "cycle_age_seconds": cycle_age,
+                "data_degraded": bool(app.state.worker_data_degraded),
             },
         }
 
@@ -609,7 +691,15 @@ async def paper_cycle(app: FastAPI) -> None:
 
 async def paper_loop(app: FastAPI) -> None:
     while True:
+        started = time.monotonic()
+        app.state.worker_cycle_in_progress = True
+        app.state.worker_cycle_started_monotonic = started
+        app.state.worker_last_progress_monotonic = started
         await paper_cycle(app)
+        app.state.worker_cycle_in_progress = False
+        app.state.worker_cycle_started_monotonic = None
+        app.state.worker_last_progress_monotonic = time.monotonic()
+        app.state.worker_data_degraded = app.state.worker_error is not None
         await asyncio.sleep(2)
 
 

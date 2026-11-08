@@ -1,4 +1,4 @@
-# Durum — 2026-11-07
+# Durum — 2026-11-08
 
 Public kaynak depo: [berkerden/codexalsat](https://github.com/berkerden/codexalsat).
 Kararlı kaynak dalı main; canlı kullanım öncesi kalan işler issue #2'de izlenir.
@@ -19,7 +19,28 @@ operasyon geçmişi içermez. Üretim işlemleri kod içinde kapalıdır.
 - İleri paper gözlem kaydı: örneklenen sağlıklı kapsam ile takvim süresi ayrı,
   ayar/kod kimliği ve devralınmış geçmiş görünür; JSON rapor indirilebilir.
 
-## Son paket: terminalden bağımsız Mac oturumu
+## Son paket: servis yanıt kontrolü ve sınırlı günlükler
+
+Arka plan servisi API yanıtını, panelin API bağlantısını ve gerçek işçi
+döngüsünün ilerlemesini ayrı izler. Her çalıştırmanın kimliği farklıdır;
+eski veya başka sürüme ait başarılı kayıt güncel sağlık sayılmaz. Salt okunur
+durum komutu güncel kimliği yeniden doğrular. Yanıt veya işçi uyarısı
+otomatik yeniden başlatma, işlem veya yeni giriş yetkisi oluşturmaz.
+
+Standart çıktı ve hata günlükleri toplam en çok 40 MiB tutulur. Eski büyük
+günlükler sınıra indirilir; yazma hatasında çıktı tüketilmeye devam edilir.
+Hesap, emir, deney arşivi ve yedekler bu temizliğin dışındadır. Güncel durum
+tek, boyutu sınırlı yerel kayıtla tutulur. Piyasa veri kalitesi ve ekonomik
+avantaj, servisin yanıt vermesinden çıkarılmaz.
+
+50 odak test geçti; ayrı Astra/high incelemesinde açık P1/P2 bulunmadı.
+Geçici native macOS servisinde 100 MiB satır sonsuz çıktı 40 MiB sınırında
+kaldı; yanıt kaybı/düzelme, aynı süreçlerin korunması, normal kapanış,
+üst süreç çökmesinde alt süreç temizliği ve eski başarıyı reddetme doğrulandı.
+Sentetik hesap kaydı değişmedi. Tam CI sonucu ilgili PR'dadır.
+İşlem/risk kararları değişmedi.
+
+## Önceki paket: terminalden bağımsız Mac oturumu
 
 Mevcut SQLite sanal hesabı, açık Mac kullanıcı oturumunda `launchd` ile
 başlatma/durum/durdurma komutlarıyla yönetilir. Terminal kapanabilir; kullanıcı
@@ -100,7 +121,7 @@ Lint, tip, derleme, gizli bilgi ve bağımlılık kontrolleri başarılı.
   envanter; araştırmada mum içi portföy düşüşü bu paketle tamamlanmış değildir.
 - En az 30 takvim günü ileri paper gözlem, yeterli bağımsız örneklem dışı kanıt,
   maliyet stresi ve piyasa koşulları. Yazılım testleri ekonomik avantaj değildir.
-- Gözetimsiz süreç sağlığı/kurtarma, fiziksel PostgreSQL kurtarma, Docker ve güvenli uzak işletim
+- Gözetimsiz hata bildirimi/kurtarma, fiziksel PostgreSQL kurtarma, Docker ve güvenli uzak işletim
   doğrulaması; son bağımsız üretim incelemesi ve uygulama içi açık kullanıcı onayı.
 
 Kurulum ve kurtarma: [OPERATIONS.md](docs/OPERATIONS.md).
