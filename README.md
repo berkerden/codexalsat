@@ -53,6 +53,11 @@ klasörü kaydedilir; yeni bir boş hesap oluşturulmaz. Durdurmak için
 aynı sürümle yeniden başlatma ve sürüm güncelleme adımları
 [operasyon belgesinde](docs/OPERATIONS.md#terminalden-bağımsız-mac-oturumu).
 
+Arka plan servisinin durum komutu, API/panel bağlantısını ve işlem döngüsünün
+ilerlemesini ayrı gösterir. Eski veya farklı çalışmaya ait yanıt güncel
+sayılmaz. Günlükler toplam 40 MiB sınırıyla döndürülür; hesap kayıtları
+silinmez. Bu kontroller işlem verisinin güncelliği veya kârlılık kanıtı değildir.
+
 ## Kullanım
 
 1. Genel bakışta parite ve mum periyodunu seçin. Mum grafiği, kotasyon, veri kalitesi
@@ -86,8 +91,8 @@ USDT kotasyon tutarı, risksiz veya bire bir USD nakit garantisi değildir.
 ```bash
 source .venv/bin/activate
 python -m pytest
-python -m ruff check backend/src backend/tests scripts/macos_service.py
-python -m mypy backend/src scripts/macos_service.py
+python -m ruff check backend/src backend/tests scripts/macos_service.py scripts/service_supervisor.py
+python -m mypy backend/src scripts/macos_service.py scripts/service_supervisor.py
 python scripts/secret_scan.py --staged
 python -m pip_audit
 source scripts/node-env.sh

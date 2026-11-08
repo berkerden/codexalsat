@@ -335,8 +335,7 @@ def test_private_files_and_safe_plist(
         assert paths[name].stat().st_mode & 0o777 == 0o600
     assert logs["base"].stat().st_mode & 0o777 == 0o700
     for name in ("stdout", "stderr"):
-        assert logs[name].stat().st_mode & 0o777 == 0o600
-        assert logs[name].parent == fake_user_home / "Library" / "Logs" / "SpotLab"
+        assert not logs[name].exists()
     assert not (paths["base"] / "stdout.log").exists()
     assert not (paths["base"] / "stderr.log").exists()
     plist = plistlib.loads(paths["plist"].read_bytes())
@@ -351,8 +350,8 @@ def test_private_files_and_safe_plist(
         "_run",
         str(paths["manifest"]),
     ]
-    assert plist["StandardOutPath"] == str(logs["stdout"])
-    assert plist["StandardErrorPath"] == str(logs["stderr"])
+    assert plist["StandardOutPath"] == "/dev/null"
+    assert plist["StandardErrorPath"] == "/dev/null"
     assert "EnvironmentVariables" in plist
     assert not {"SPOTLAB_TESTNET_API_KEY", "SPOTLAB_TESTNET_API_SECRET"} & set(
         plist["EnvironmentVariables"]
@@ -447,6 +446,39 @@ def test_status_treats_launchctl_timeout_as_unknown(
     assert output["global_job"] == "not-confirmed"
 
 
+def test_status_treats_malformed_snapshot_as_stale_without_probe(
+    service, fake_repo, monkeypatch, capsys
+) -> None:
+    root, data = fake_repo
+    paths = service.service_paths(root)
+    paths["base"].mkdir(parents=True)
+    paths["manifest"].write_text(
+        json.dumps(service._manifest(root, "a" * 40, data, False)), encoding="utf-8"
+    )
+    paths["runtime"].write_text(
+        json.dumps(
+            {
+                "schema_version": True,
+                "run_id": "not-an-id",
+                "revision": "a" * 40,
+                "root": str(root),
+                "supervisor_pid": 10**100,
+                "phase": [],
+                "checked_at": float("inf"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service, "_fresh_health", lambda identity: pytest.fail("no probe"))
+    monkeypatch.setattr(service, "_run", lambda argv, **kwargs: completed(tuple(argv)))
+
+    service.status(root)
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["service_state"] == "stale"
+    assert output["current_check"] == {"responsive": False}
+
+
 def test_stop_targets_only_fixed_user_session_job(service, monkeypatch) -> None:
     calls: list[tuple[str, ...]] = []
     timeouts: list[int] = []
@@ -501,8 +533,18 @@ def test_runtime_uses_sanitized_environment_and_current_manifest(
     with pytest.raises(RuntimeError, match="intercepted"):
         service.runtime(path)
 
+    instance = captured["env"]["SPOTLAB_SERVICE_INSTANCE_ID"]
+    assert len(instance) == 32
+    int(instance, 16)
     assert captured == {
-        "program": "/bin/bash",
-        "argv": ["/bin/bash", str(root / "scripts/run-local.sh"), "--keep-awake"],
+        "program": str(root / ".venv/bin/python"),
+        "argv": [
+            str(root / ".venv/bin/python"),
+            str(root / "scripts/service_supervisor.py"),
+            "--root", str(root),
+            "--snapshot", str(root / "data/service/runtime.json"),
+            "--revision", "a" * 40,
+            "--keep-awake",
+        ],
         "env": safe_env,
     }

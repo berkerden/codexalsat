@@ -7,6 +7,7 @@ import argparse
 import contextlib
 import fcntl
 import json
+import math
 import os
 import plistlib
 import pwd
@@ -17,6 +18,8 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
+import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -58,6 +61,7 @@ def service_paths(root: Path) -> dict[str, Path]:
         "base": base,
         "manifest": base / "manifest.json",
         "plist": base / f"{LABEL}.plist",
+        "runtime": base / "runtime.json",
     }
 
 
@@ -330,8 +334,10 @@ def _plist(
         "ExitTimeOut": 20,
         "Umask": 0o077,
         "AbandonProcessGroup": False,
-        "StandardOutPath": str(logs["stdout"]),
-        "StandardErrorPath": str(logs["stderr"]),
+        # The supervisor owns bounded output files.  launchd must never impose a
+        # file-size resource limit on the process group (which also writes SQLite).
+        "StandardOutPath": "/dev/null",
+        "StandardErrorPath": "/dev/null",
     }
 
 
@@ -482,8 +488,8 @@ def start(root: Path, env: Mapping[str, str], *, keep_awake: bool, accept: bool)
         raise ServiceError("Yerel servis dizini doğrulanamadı.")
     if _log_directory(home) != logs["base"]:
         raise ServiceError("Servis günlük dizini doğrulanamadı.")
-    for log_name in ("stdout", "stderr"):
-        _open_private_log(logs[log_name])
+    # Existing logs are intentionally left untouched until the newly acquired
+    # supervisor starts and holds the single-writer lock.
     _private_file(paths["plist"], plistlib.dumps(plist, fmt=plistlib.FMT_XML, sort_keys=True))
     old_manifest = None
     if previous is not None:
@@ -537,6 +543,8 @@ def status(root: Path) -> None:
         "global_job": global_job,
         "local_manifest": "present" if manifest is not None else "absent",
         "logs_dir": str(logs["base"]),
+        "service_state": "unknown",
+        "current_check": {"responsive": False},
     }
     if manifest is not None:
         configured_root = Path(str(manifest["repo_root"]))
@@ -548,10 +556,137 @@ def status(root: Path) -> None:
                 "manifest_matches_this_checkout": configured_root.resolve() == root.resolve(),
             }
         )
+        snapshot = _load_runtime_snapshot(paths["runtime"])
+        if snapshot is not None:
+            payload["last_known_snapshot"] = snapshot
+            now = time.time()
+            checked = snapshot.get("checked_at")
+            pid = snapshot.get("supervisor_pid")
+            phase = snapshot.get("phase")
+            identity = snapshot.get("run_id")
+            matches = (
+                type(snapshot.get("schema_version")) is int
+                and snapshot.get("schema_version") == 1
+                and snapshot.get("root") == str(configured_root)
+                and snapshot.get("revision") == manifest["revision"]
+                and isinstance(phase, str)
+                and phase in {"starting", "running"}
+                and _fresh_snapshot_time(checked, now)
+                and type(pid) is int
+                and pid > 0
+                and pid <= 2**31 - 1
+                and isinstance(identity, str)
+                and re.fullmatch(r"[0-9a-f]{32}", identity) is not None
+                and _pid_alive(pid)
+            )
+            if matches:
+                assert isinstance(identity, str)
+                responsive = _fresh_health(identity)
+                payload["current_check"] = {
+                    "responsive": responsive,
+                    "identity_confirmed": responsive,
+                    "supervisor_pid_confirmed": True,
+                }
+                if global_job == "loaded" and responsive:
+                    payload["service_state"] = "responsive"
+                else:
+                    payload["service_state"] = "stale"
+            else:
+                payload["service_state"] = "stale"
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def _load_runtime_snapshot(path: Path) -> dict[str, Any] | None:
+    try:
+        flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+    except (FileNotFoundError, OSError):
+        return None
+    try:
+        metadata = os.fstat(fd)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_size > 16 * 1024
+        ):
+            os.close(fd)
+            return None
+        with os.fdopen(fd, "rb") as stream:
+            value = json.loads(stream.read(16 * 1024 + 1))
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        return None
+
+
+def _fresh_snapshot_time(value: Any, now: float) -> bool:
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value) and now - 15 <= value <= now + 1
+    except (OverflowError, TypeError):
+        return False
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return False
+
+
+def _fresh_health(identity: str) -> bool:
+    try:
+        # Resolve the exact sibling, independent of cwd, PYTHONPATH, or an
+        # unrelated module with the same name.
+        import importlib.util
+
+        sibling = Path(__file__).resolve().with_name("service_supervisor.py")
+        spec = importlib.util.spec_from_file_location("spotlab_service_supervisor", sibling)
+        if spec is None or spec.loader is None:
+            return False
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for port in module.HEALTH_PORTS:
+            module.probe_health(port, identity)
+        return True
+    except (ImportError, OSError, RuntimeError):
+        return False
+
+
 def runtime(manifest_path: Path) -> None:
+    try:
+        _validated_runtime(manifest_path)
+    except (ServiceError, OSError):
+        # launchd output is /dev/null by design, so retain one bounded,
+        # non-sensitive diagnostic code for bootstrap failures.
+        with contextlib.suppress(ServiceError, OSError):
+            _private_file(
+                manifest_path.parent / "runtime.json",
+                (json.dumps({
+                    "schema_version": 1,
+                    "run_id": None,
+                    "revision": None,
+                    "root": None,
+                    "supervisor_pid": os.getpid(),
+                    "phase": "bootstrap_failed",
+                    "checked_at": time.time(),
+                    "components": {},
+                    "logging": {"failed": False},
+                    "current_warning": "runtime_validation_failed",
+                    "last_transition": {
+                        "at": time.time(), "warning": "runtime_validation_failed"
+                    },
+                }, sort_keys=True) + "\n").encode(),
+            )
+        raise
+
+
+def _validated_runtime(manifest_path: Path) -> None:
     manifest = _load_manifest(manifest_path)
     if manifest is None or manifest.get("label") != LABEL:
         raise ServiceError("Servis bildirimi bulunamadı.")
@@ -565,10 +700,22 @@ def runtime(manifest_path: Path) -> None:
     if manifest["testnet_ledger_present"] and not testnet_present:
         raise ServiceError("Daha önce bulunan Testnet işlem defteri artık yok.")
     environment = _runtime_environment(root, data)
-    arguments = ["/bin/bash", str(root / "scripts" / "run-local.sh")]
+    # A caller-provided value can never join a previous run's identity.
+    environment["SPOTLAB_SERVICE_INSTANCE_ID"] = uuid.uuid4().hex
+    python = root / ".venv" / "bin" / "python"
+    arguments = [
+        str(python),
+        str(root / "scripts" / "service_supervisor.py"),
+        "--root",
+        str(root),
+        "--snapshot",
+        str(service_paths(root)["runtime"]),
+        "--revision",
+        revision,
+    ]
     if manifest["keep_awake"]:
         arguments.append("--keep-awake")
-    os.execve(arguments[0], arguments, environment)
+    os.execve(str(python), arguments, environment)
 
 
 def parser() -> argparse.ArgumentParser:

@@ -82,8 +82,8 @@ uygulanır. Çalışma sırasında bu kaynak klasörünü değiştirmeyin; sür�
 dosyaların veya bağımlılıkların değişmesini kilitlemez. `start` başarısı
 başlatma talebinin kabul edildiğini gösterir; piyasa verisinin sağlığını veya
 işlem yetkisini kanıtlamaz. `status` içindeki servis kaydı da sürecin hâlâ
-çalıştığı anlamına gelmez. Panel erişimini, son gözlemi ve veri sorunlarını
-ayrıca kontrol edin.
+çalıştığı anlamına gelmez. Aşağıdaki yanıt verme kontrollerini, son gözlemi ve
+veri sorunlarını ayrıca inceleyin.
 
 Durdurmak için:
 
@@ -113,11 +113,62 @@ kaydı değiştirilmez. Servis yapılandırması `data/service` altında, günl�
 ise `~/Library/Logs/SpotLab` içinde kişiye özel izinlerle saklanır; Git'e
 yüklenmez. macOS arka plan yöneticisi Documents altındaki günlük dosyalarını
 açamayabildiği için günlükler standart kullanıcı günlük alanına yazılır.
-Kaynak ve hesap dosyalarının yeri değişmez. Günlükler otomatik döndürülmez;
-boyutlarını izleyin ve gerektiğinde servis durmuşken özel yedek
-klasörüne taşıyın. Günlükleri veya hesap dosyalarını public hata bildirimine
-eklemeyin. Bu paket süreç içi takılma algılama, kesintisiz sunucu işletimi ve
+Kaynak ve hesap dosyalarının yeri değişmez. Günlükleri veya hesap dosyalarını
+public hata bildirimine eklemeyin. Bu paket kesintisiz sunucu işletimi ve
 30 günlük sağlıklı gözlem kabul koşullarını tamamlamaz.
+
+### Yanıt verme ve işlem döngüsü kontrolleri
+
+Arka plan servisinde API ile panelin API bağlantısı beş saniyede bir ayrı
+yoklanır. Her yoklama yalnız sabit yerel adresi kullanır; yönlendirme veya
+proxy izlenmez. İki saniyelik toplam süre ve 16 KiB yanıt sınırı vardır.
+Yanıtın aynı servis çalışmasına ait kimliği taşıması gerekir. Yanlış servis,
+bozuk yanıt veya zaman aşımı, başarılı yanıt olarak sayılmaz.
+
+`GET /api/health` yalnız bellekteki çalışma bilgilerini okur. Veritabanını
+sorgulamaz, piyasa verisi almaz ve yeni işlem/gözlem kaydı oluşturmaz.
+API yanıtı o anda istek işlenebildiğini; panel üzerinden aynı yanıtın alınması
+panelin HTTP/API bağlantısını gösterir. Bunlar sayfanın tarayıcıda doğru
+çizildiği veya işlem verisinin güncel olduğu anlamına gelmez.
+
+İşlem döngüsünün gerçekten başladığı ve tamamlandığı zamanlar ayrıca izlenir.
+Döngü kapalı, henüz başlamamış, ilerliyor, uzun süredir ilerlememiş veya durmuş
+olabilir. 300 saniyedir ilerleme yoksa uyarı oluşur; bu bir işlem zaman aşımı
+veya kesin kilitlenme teşhisi değildir. Uzun veri alma denemeleri de bu durumu
+oluşturabilir. Döngünün ilerlemesi, veri sorununun çözüldüğünü kanıtlamaz;
+mevcut işçi hatası ayrı gösterilir. `data_degraded` yalnız mevcut işçi hata
+bayrağını yansıtır; bütün piyasa veri kalitesi tanılarının birleşimi değildir.
+
+Başlangıç için 15 saniye tolerans vardır; art arda üç başarısız HTTP yoklaması
+sonrası erişim uyarısı görünür. Başarılı yanıt döndüğünde ilgili güncel uyarı
+kalkar. Yalnız son geçiş özeti tutulur. Uyarılar uygulamayı otomatik durdurmaz,
+yeniden başlatmaz veya işlem yetkisi vermez. İzleme sürecinin kendisi
+çalışamazsa servis sona erer; macOS aynı servis grubundaki süreçleri temizler.
+
+`status`, kayıtlı çalışma özetini seçilmiş sürüm ve süreçle karşılaştırır;
+güncel yanıtı ayrıca kimliğiyle kontrol eder. Kayıp, bozuk, farklı sürüme ait
+veya 15 saniyeden eski özet güncel sağlık kanıtı sayılmaz. Durdurulmuş işin
+eski başarılı sonucu çalışıyor diye gösterilmez. Bu komut dosya oluşturmaz,
+günlük döndürmez veya hesap kaydını değiştirmez. Terminal dışında otomatik
+bildirim gönderilmez.
+
+### Boyutu sınırlı servis günlükleri
+
+Servisin stdout ve stderr akışları ayrı tutulur. Her biri en çok 5 MiB etkin
+dosya ile üç adet 5 MiB arşivden oluşur; iki akışın toplam sınırı 40 MiB'dir.
+Yeni veri geldikçe en eski günlük parçaları silinir. Önceki sürümden kalan
+büyük günlükler de bu sınıra indirilir. Satır sonu olmayan uzun çıktılar
+bellekte sınırsız biriktirilmez. Sanal hesap, emir, dolum, deney arşivi ve
+veritabanı yedekleri bu döndürmenin kapsamına girmez.
+
+Günlük yazılamazsa çıktı okunmaya devam edilir ve kaydedilemeyen bölüm atılır;
+durumda günlük yazma sorunu belirtilir. İzleme özeti atomik olarak değiştirilen
+küçük bir dosyadır; ham HTTP yanıtı veya istisna metni içermez. Python kodu
+çalışmaya başlamadan oluşan bir sistem hatasında özet de bulunmayabilir;
+bu durumda servis kaydı tek başına başarı kanıtı değildir.
+
+Bu sınırlar yalnız arka plan servisinin günlüklerine uygulanır. Ön plandaki
+`run-local.sh` terminal çıktısının davranışı değişmez.
 
 ## Ayrı paper deneyi
 
