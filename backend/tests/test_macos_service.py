@@ -513,11 +513,12 @@ def test_non_macos_rejected_before_start_mutation(service, fake_repo, monkeypatc
     assert not service.service_paths(root)["base"].exists()
 
 
+@pytest.mark.parametrize("notify", [False, True])
 def test_runtime_uses_sanitized_environment_and_current_manifest(
-    service, fake_repo, monkeypatch
+    service, fake_repo, monkeypatch, notify
 ) -> None:
     root, data = fake_repo
-    manifest = service._manifest(root, "a" * 40, data, True)
+    manifest = service._manifest(root, "a" * 40, data, True, notify)
     path = root / "manifest.json"
     path.write_text(json.dumps(manifest), encoding="utf-8")
     monkeypatch.setattr(service, "source_state", lambda candidate: ("a" * 40, root))
@@ -545,6 +546,251 @@ def test_runtime_uses_sanitized_environment_and_current_manifest(
             "--snapshot", str(root / "data/service/runtime.json"),
             "--revision", "a" * 40,
             "--keep-awake",
-        ],
+        ] + (["--notify-local"] if notify else []),
         "env": safe_env,
     }
+
+
+def loaded_job_text(service, root: Path) -> str:
+    paths = service.service_paths(root)
+    arguments = [str(root / '.venv/bin/python'), str(root / 'scripts/macos_service.py'),
+                 '_run', str(paths['manifest'])]
+    return (service.service_target() + ' = {\n'
+            + '\tpath = ' + str(paths['plist']) + '\n'
+            + '\tprogram = ' + arguments[0] + '\n'
+            + '\tworking directory = ' + str(root) + '\n'
+            + '\targuments = {\n' + ''.join('\t\t' + arg + '\n' for arg in arguments)
+            + '\t}\n}\n')
+
+
+def prepare_restart(service, fake_repo, monkeypatch):
+    root, data = fake_repo
+    paths = service.service_paths(root)
+    paths['base'].mkdir()
+    manifest = service._manifest(root, 'a' * 40, data, True, True)
+    paths['manifest'].write_text(json.dumps(manifest))
+    home = service._user_home()
+    (home / 'Library/Logs/SpotLab').mkdir()
+    for name in ('scripts/run-local.sh', 'scripts/service_supervisor.py',
+                 'scripts/node-env.sh', 'frontend/node_modules/vite/bin/vite.js',
+                 '.venv/bin/uvicorn', '.tools/npm/bin/npm-cli.js'):
+        path = root / name
+        path.parent.mkdir(exist_ok=True, parents=True)
+        path.write_text('fixture')
+        path.chmod(0o700)
+    monkeypatch.setattr(service, 'source_state', lambda _: ('a' * 40, root))
+    monkeypatch.setattr(service, '_runtime_environment', lambda *_: {})
+    monkeypatch.setattr(service, '_wait_stopped', lambda pid: None)
+    access = os.access
+    monkeypatch.setattr(service.os, 'access', lambda path, mode: (
+        True if path == '/usr/bin/caffeinate' else access(path, mode)))
+    monkeypatch.setattr(service, '_run', lambda argv, **kw: completed(
+        tuple(argv), stdout=loaded_job_text(service, root)))
+    return root, data, paths, manifest
+
+
+def test_notifications_legacy_default_and_strict_flag(service, fake_repo) -> None:
+    root, data = fake_repo
+    manifest = service._manifest(root, 'a' * 40, data, False)
+    assert manifest['notify_local'] is False
+    path = root / 'legacy.json'
+    del manifest['notify_local']
+    path.write_text(json.dumps(manifest))
+    assert service._load_manifest(path).get('notify_local', False) is False
+    for bad in ('false', 1, None, []):
+        manifest['notify_local'] = bad
+        path.write_text(json.dumps(manifest))
+        with pytest.raises(service.ServiceError):
+            service._load_manifest(path)
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_restart_preserves_settings_without_http_dependency(
+    service, fake_repo, monkeypatch, legacy
+):
+    root, _, paths, manifest = prepare_restart(service, fake_repo, monkeypatch)
+    if legacy:
+        del manifest['notify_local']
+        paths['manifest'].write_text(json.dumps(manifest))
+    events = []
+    monkeypatch.setattr(service, '_fresh_health', lambda _: pytest.fail('no HTTP dependency'))
+    monkeypatch.setattr(service, 'stop', lambda: events.append('stop'))
+    monkeypatch.setattr(service, '_wait_stopped', lambda pid: events.append('wait'))
+    monkeypatch.setattr(service, 'start', lambda *a, **kw: events.append(kw))
+    service.restart(root, {})
+    assert events == [
+        'stop', 'wait', {'keep_awake': True, 'accept': False, 'notify_local': not legacy}
+    ]
+
+
+@pytest.mark.parametrize('fault', ['revision', 'dirty', 'missing_manifest', 'bad_manifest',
+                                  'missing_data', 'missing_testnet', 'retargeted_data',
+                                  'environment', 'python', 'uvicorn', 'caffeinate', 'npm',
+                                  'vite', 'unsafe_logs', 'node',
+                                  'foreign_job', 'ambiguous_job'])
+def test_restart_preflight_faults_never_stop(
+    service, fake_repo, monkeypatch, fault: str
+) -> None:
+    root, data, paths, manifest = prepare_restart(service, fake_repo, monkeypatch)
+    env = {}
+    if fault == 'revision':
+        monkeypatch.setattr(service, 'source_state', lambda _: ('b' * 40, root))
+    elif fault == 'dirty':
+        def dirty(_):
+            raise service.ServiceError('dirty')
+        monkeypatch.setattr(service, 'source_state', dirty)
+    elif fault == 'missing_manifest':
+        paths['manifest'].unlink()
+    elif fault == 'bad_manifest':
+        paths['manifest'].write_text('not json')
+    elif fault == 'missing_data':
+        (data / 'paper.sqlite').unlink()
+    elif fault == 'missing_testnet':
+        manifest['testnet_ledger_present'] = True
+        paths['manifest'].write_text(json.dumps(manifest))
+    elif fault == 'retargeted_data':
+        link = root / 'link'
+        link.symlink_to(data, target_is_directory=True)
+        manifest['data_dir'] = str(link)
+        paths['manifest'].write_text(json.dumps(manifest))
+    elif fault == 'environment':
+        env = {'DATABASE_URL': 'unsupported'}
+    elif fault == 'python':
+        (root / '.venv/bin/python').unlink()
+    elif fault == 'uvicorn':
+        (root / '.venv/bin/uvicorn').unlink()
+    elif fault == 'caffeinate':
+        access = os.access
+        monkeypatch.setattr(service.os, 'access', lambda path, mode: (
+            False if path == '/usr/bin/caffeinate' else access(path, mode)))
+    elif fault == 'npm':
+        (root / '.tools/npm/bin/npm-cli.js').unlink()
+    elif fault == 'vite':
+        (root / 'frontend/node_modules/vite/bin/vite.js').unlink()
+    elif fault == 'unsafe_logs':
+        logs = service.log_paths(service._user_home())['base']
+        (logs / 'stdout.log').symlink_to(data / 'paper.sqlite')
+    elif fault == 'node':
+        def invalid(*_):
+            raise service.ServiceError('runtime missing')
+        monkeypatch.setattr(service, '_runtime_environment', invalid)
+    elif fault in {'foreign_job', 'ambiguous_job'}:
+        text = loaded_job_text(service, root / 'other') if fault == 'foreign_job' else (
+            loaded_job_text(service, root) + '\tpath = duplicate\n')
+        monkeypatch.setattr(service, '_run', lambda argv, **kw: completed(tuple(argv), stdout=text))
+    monkeypatch.setattr(service, 'stop', lambda: pytest.fail('preflight must not stop'))
+    monkeypatch.setattr(service, 'start', lambda *a, **kw: pytest.fail('must not start'))
+    with pytest.raises((service.ServiceError, OSError)):
+        service.restart(root, env)
+
+
+def test_restart_stop_failure_prevents_start_and_start_failure_is_explicit(
+    service, fake_repo, monkeypatch
+) -> None:
+    root, _, _, _ = prepare_restart(service, fake_repo, monkeypatch)
+    def failed_stop():
+        raise service.ServiceError('stop failed')
+    monkeypatch.setattr(service, 'stop', failed_stop)
+    monkeypatch.setattr(service, 'start', lambda *a, **kw: pytest.fail('must not start'))
+    with pytest.raises(service.ServiceError, match='stop failed'):
+        service.restart(root, {})
+    monkeypatch.setattr(service, 'stop', lambda: None)
+    def failed_start(*a, **kw):
+        raise service.ServiceError('start failed')
+    monkeypatch.setattr(service, 'start', failed_start)
+    with pytest.raises(service.ServiceError, match='talebi kabul edildi ancak'):
+        service.restart(root, {})
+
+
+def test_restart_cli_holds_one_lock_and_rejects_version_override(service, monkeypatch):
+    from contextlib import contextmanager
+    events = []
+    @contextmanager
+    def lock():
+        events.append('lock')
+        yield
+        events.append('unlock')
+    monkeypatch.setattr(service, 'mutation_lock', lock)
+    monkeypatch.setattr(service, 'restart', lambda *a: events.append('restart'))
+    assert service.main(['restart']) == 0
+    assert events == ['lock', 'restart', 'unlock']
+    with pytest.raises(SystemExit):
+        service.parser().parse_args(['restart', '--accept-current-version'])
+
+
+@pytest.mark.parametrize('fault', ['program', 'working directory', 'arguments',
+                                  'missing_arguments', 'duplicate_arguments',
+                                  'unloaded', 'timeout'])
+def test_restart_rejects_partial_ownership_mismatches(service, fake_repo, monkeypatch, fault):
+    root, _, _, _ = prepare_restart(service, fake_repo, monkeypatch)
+    text = loaded_job_text(service, root)
+    if fault in {'program', 'working directory'}:
+        text = text.replace('\t' + fault + ' = ', '\t' + fault + ' = foreign-')
+    elif fault == 'arguments':
+        text = text.replace('\t\t_run\n', '\t\t_other\n')
+    elif fault == 'missing_arguments':
+        text = text.replace('\targuments = {\n', '\tmissing = {\n')
+    elif fault == 'duplicate_arguments':
+        text += '\targuments = {\n'
+    def run(argv, **kw):
+        if fault == 'timeout':
+            raise service.ServiceError('timeout')
+        return completed(tuple(argv), returncode=1 if fault == 'unloaded' else 0, stdout=text)
+    monkeypatch.setattr(service, '_run', run)
+    monkeypatch.setattr(service, 'stop', lambda: pytest.fail('must not stop'))
+    with pytest.raises(service.ServiceError):
+        service.restart(root, {})
+
+
+def test_restart_waits_for_both_old_pid_and_confirmed_missing_job(service, monkeypatch):
+    clock = [0.0]
+    calls = []
+    monkeypatch.setattr(service.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(service.time, 'sleep',
+                        lambda seconds: clock.__setitem__(0, clock[0]+seconds))
+    missing = (f'Bad request.\nCould not find service "{service.LABEL}" '
+               f'in domain for user gui: {os.getuid()}\n')
+    def run(argv, **kw):
+        calls.append(kw['timeout'])
+        if len(calls) < 2:
+            return completed(tuple(argv))
+        return subprocess.CompletedProcess(argv, 113, '', missing)
+    def kill(pid, signal):
+        assert pid == 123 and signal == 0
+        if len(calls) == 2:
+            raise PermissionError('not proof of exit')
+        if len(calls) >= 3:
+            raise ProcessLookupError('exited')
+    monkeypatch.setattr(service, '_run', run)
+    monkeypatch.setattr(service.os, 'kill', kill)
+    service._wait_stopped(123)
+    assert len(calls) == 3
+    assert all(timeout <= 2 for timeout in calls)
+
+
+def test_restart_unknown_removal_and_timeout_never_start(service, fake_repo, monkeypatch):
+    root, _, _, _ = prepare_restart(service, fake_repo, monkeypatch)
+    events = []
+    monkeypatch.setattr(service, 'stop', lambda: events.append('stop'))
+    def not_stopped(pid):
+        raise service.ServiceError('not confirmed')
+    monkeypatch.setattr(service, '_wait_stopped', not_stopped)
+    monkeypatch.setattr(service, 'start', lambda *a, **kw: pytest.fail('must not start'))
+    with pytest.raises(service.ServiceError, match='talebi kabul edildi ancak'):
+        service.restart(root, {})
+    assert events == ['stop']
+
+
+def test_removal_barrier_rejects_generic_print_error_and_has_deadline(service, monkeypatch):
+    monkeypatch.setattr(service, '_run', lambda argv, **kw: completed(tuple(argv), returncode=1))
+    with pytest.raises(service.ServiceError, match='kaldırıldığı'):
+        service._wait_stopped(None)
+    clock = [0.0]
+    monkeypatch.setattr(service, 'STOP_TIMEOUT', 0.3)
+    monkeypatch.setattr(service.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(service.time, 'sleep',
+                        lambda seconds: clock.__setitem__(0, clock[0]+seconds))
+    monkeypatch.setattr(service, '_run', lambda argv, **kw: completed(tuple(argv)))
+    with pytest.raises(service.ServiceError, match='süresi'):
+        service._wait_stopped(None)
+    assert clock[0] == 0.3

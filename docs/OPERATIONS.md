@@ -98,8 +98,10 @@ saniye içinde bitmeyen işi zorla sonlandırabilir. Sanal pozisyon yönetimi
 uygulama yeniden çalışana kadar kesilir. Borsadaki mevcut emirlerin durumunu
 ayrıca doğrulayın.
 
-Kesinti sonrası kayıtları inceleyin, `stop` ile servis kaydını kaldırın ve
-aynı kaynak sürümünde tekrar `start --keep-awake` kullanın. Yeni sanal girişler
+Kesinti sonrası kayıtları inceleyin. Kayıtlı servis aynı temiz kaynak sürümüne
+aitse aşağıdaki kontrollü yeniden başlatmayı kullanabilirsiniz. Alternatif
+olarak `stop` ile servis kaydını kaldırıp aynı sürümde `start --keep-awake`
+kullanın. Yeni sanal girişler
 kapalı açılır; Testnet izleyicisi otomatik başlamaz. Kayıtlı sürüm değişmişse
 normal başlatma reddedilir. Güncelleme için önce durdurun, yedek alın, seçilmiş
 temiz sürümü hazırlayın; ardından sürüm değişimini açıkça kabul edin:
@@ -149,8 +151,62 @@ yeniden başlatmaz veya işlem yetkisi vermez. İzleme sürecinin kendisi
 güncel yanıtı ayrıca kimliğiyle kontrol eder. Kayıp, bozuk, farklı sürüme ait
 veya 15 saniyeden eski özet güncel sağlık kanıtı sayılmaz. Durdurulmuş işin
 eski başarılı sonucu çalışıyor diye gösterilmez. Bu komut dosya oluşturmaz,
-günlük döndürmez veya hesap kaydını değiştirmez. Terminal dışında otomatik
-bildirim gönderilmez.
+günlük döndürmez veya hesap kaydını değiştirmez. İsteğe bağlı Mac bildirimleri
+aşağıdaki gibi ayrıca etkinleştirilir.
+
+### İsteğe bağlı Mac bildirimleri
+
+Servis durmuşken `start` komutuna `--notify-local` ekleyin:
+
+```bash
+.venv/bin/python scripts/macos_service.py start --keep-awake --notify-local
+```
+
+Varsayılan kapalıdır; eski servis kayıtlarında da kapalı kabul edilir.
+Bildirimde yalnız genel bir servis kontrolü uyarısı bulunur; hesap bilgisi,
+parite, tutar, dosya yolu veya hata ayrıntısı içermez. E-posta ya da başka
+bir kişiye mesaj göndermez. API/panel erişim sorunu, işçi uyarısı veya günlük
+yazma sorunu gözlendiğinde Mac bildirim sistemine gönderim denenir.
+
+Aynı uyarı tekrarlanmaz; farklı uyarılar dahil gönderim denemeleri arasında
+en az beş dakika vardır. Başarısız deneme de bu aralığı tüketir. Bu sınır
+aynı servis çalışması için geçerlidir. Bildirim hatası veya zaman aşımı
+sağlık kontrolünü ve botu durdurmaz; bekleyen bildirimler sınırsız birikmez.
+Bildirim komutunun başarılı olması ekranda görüntülendiğini kanıtlamaz:
+macOS izinleri, Odak modu ve sistem koşulları gösterimi engelleyebilir.
+
+Bu özellik mevcut izleme süreci çalışırken fark edilen uyarılar içindir.
+İzleme sürecinin kendisinin çökmesi, zorla kapatılması, kapak kapatma, uyku,
+oturum kapatma ve elektrik kesintisi için bağımsız bir alarm değildir.
+Bildirim hiçbir işlem başlatmaz ve yeniden başlatma yapmaz.
+
+### Aynı sürümle kontrollü yeniden başlatma
+
+```bash
+.venv/bin/python scripts/macos_service.py restart
+.venv/bin/python scripts/macos_service.py status
+```
+
+`restart`, kayıtlı aynı sürümü, veri klasörünü, uyku korumasını ve bildirim
+tercihini korur. Yeni sürüm kabulü veya ayar değiştirme seçeneği yoktur.
+Temiz kaynak, mevcut veri kayıtları, çalıştırıcılar ve servis yolları önce
+kontrol edilir. Yüklü işin bu kaynak klasörüne ait olduğu doğrulanamazsa
+durdurma yapılmaz. macOS servis bilgisi beklenen biçimde değilse komut
+güvenli biçimde reddedilir; başka klasördeki servis sessizce devralınmaz.
+HTTP yanıtı gerektirmez; yanıt vermeyen uygulama için de kullanılabilir.
+
+Kontroller geçince durdurma istenir; eski sürecin ve servis kaydının kalktığı
+en çok 30 saniye daha beklenerek doğrulanır. Kapanış belirsizse yeni başlatma
+yapılmaz. Kapanış doğrulanınca bir kez başlatma isteği gönderilir.
+Durdurma başarısızsa yeni başlatma denenmez. Durdurma sonrasındaki başlatma
+başarısız olabilir; komut bunu açıkça bildirir, otomatik tekrar yapmaz.
+Başarılı çıktı yalnız talebin kabul edildiğini gösterir; `status` sonucunu
+ve panelde veri/pozisyon durumunu ayrıca inceleyin. Ön kontrol, harici dosya
+değişikliklerini veya sonradan oluşan port/disk sorunlarını engellemez.
+
+Yeniden başlatma açık pozisyonları kapatmaz; yönetimleri kesinti süresince
+durur. Kayıtlar korunur, yeni sanal girişler kapalı açılır ve Testnet izleyicisi
+kendiliğinden başlamaz. Otomatik kurtarma veya yeni işlem yetkisi verilmez.
 
 ### Boyutu sınırlı servis günlükleri
 

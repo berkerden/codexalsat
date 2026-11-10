@@ -1,4 +1,4 @@
-# Durum — 2026-11-08
+# Durum — 2026-11-10
 
 Public kaynak depo: [berkerden/codexalsat](https://github.com/berkerden/codexalsat).
 Kararlı kaynak dalı main; canlı kullanım öncesi kalan işler issue #2'de izlenir.
@@ -19,7 +19,28 @@ operasyon geçmişi içermez. Üretim işlemleri kod içinde kapalıdır.
 - İleri paper gözlem kaydı: örneklenen sağlıklı kapsam ile takvim süresi ayrı,
   ayar/kod kimliği ve devralınmış geçmiş görünür; JSON rapor indirilebilir.
 
-## Son paket: servis yanıt kontrolü ve sınırlı günlükler
+## Son paket: yerel bildirim ve kontrollü yeniden başlatma
+
+`start --notify-local` mevcut izleme sürecinin fark ettiği sorunlar için
+kişisel bilgi içermeyen Mac bildirimi göndermeyi dener. Varsayılan kapalıdır.
+Aynı uyarı yinelenmez; farklı uyarılar dahil denemeler arasında en az beş
+dakika bulunur. Bildirim işlemi ve sonucu bellekte ayrı tutulur; gecikmesi
+veya hatası sağlık kontrolünü durdurmaz. İşletim sisteminin bildirimi kabul
+etmesi ekranda gösterim kanıtı değildir. Sürecin kendisinin çökmesi veya
+bilgisayarın uyuması için bağımsız bir alarm kurulmuş değildir.
+
+`restart`, aynı kaynak sürümünü, veri dizinini, uyku korumasını ve bildirim
+tercihini korur. Kaynak, veri, çalıştırıcı ve yüklü servis sahipliği kontrolleri
+geçmeden durdurma yapmaz. Eski süreç ve servis kaydı kalkmadan yeni başlatma
+denenmez; kapanış doğrulaması süre sınırlıdır. Otomatik tekrar, sürüm yükseltme,
+pozisyon kapatma veya yeni işlem yetkisi vermez.
+
+88 odak test ve 15 başlatıcı testi geçti; ayrı Astra/high incelemesinde açık
+P1/P2 kalmadı. Native macOS yapay servisinde bildirim yolu, değişmiş kaynakta
+durdurmadan reddetme, yanıt vermeyen servisi aynı kayıtlarla yeniden başlatma
+ve dört ardışık yeniden başlatma doğrulandı. Tam CI sonucu ilgili PR'dadır.
+
+## Önceki paket: servis yanıt kontrolü ve sınırlı günlükler
 
 Arka plan servisi API yanıtını, panelin API bağlantısını ve gerçek işçi
 döngüsünün ilerlemesini ayrı izler. Her çalıştırmanın kimliği farklıdır;
@@ -121,7 +142,7 @@ Lint, tip, derleme, gizli bilgi ve bağımlılık kontrolleri başarılı.
   envanter; araştırmada mum içi portföy düşüşü bu paketle tamamlanmış değildir.
 - En az 30 takvim günü ileri paper gözlem, yeterli bağımsız örneklem dışı kanıt,
   maliyet stresi ve piyasa koşulları. Yazılım testleri ekonomik avantaj değildir.
-- Gözetimsiz hata bildirimi/kurtarma, fiziksel PostgreSQL kurtarma, Docker ve güvenli uzak işletim
+- Bağımsız kesinti bildirimi/kurtarma, fiziksel PostgreSQL kurtarma, Docker ve güvenli uzak işletim
   doğrulaması; son bağımsız üretim incelemesi ve uygulama içi açık kullanıcı onayı.
 
 Kurulum ve kurtarma: [OPERATIONS.md](docs/OPERATIONS.md).
