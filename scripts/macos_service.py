@@ -99,7 +99,7 @@ def _require_macos() -> None:
 
 
 def _run(
-    command: Sequence[str], *, timeout: int = COMMAND_TIMEOUT
+    command: Sequence[str], *, timeout: float = COMMAND_TIMEOUT
 ) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
@@ -236,6 +236,8 @@ def _load_manifest(path: Path) -> dict[str, Any] | None:
         raise ServiceError("Servis bildirimi geçersiz.")
     if type(value["keep_awake"]) is not bool or type(value["testnet_ledger_present"]) is not bool:
         raise ServiceError("Servis bildirimi geçersiz.")
+    if type(value.get("notify_local", False)) is not bool:
+        raise ServiceError("Servis bildirimi geçersiz.")
     if value["label"] != LABEL or re.fullmatch(r"[0-9a-f]{40}", value["revision"]) is None:
         raise ServiceError("Servis bildirimi geçersiz.")
     if not Path(value["repo_root"]).is_absolute() or not Path(value["data_dir"]).is_absolute():
@@ -297,7 +299,9 @@ def _runtime_environment(root: Path, data: Path) -> dict[str, str]:
     }
 
 
-def _manifest(root: Path, revision: str, data: Path, keep_awake: bool) -> dict[str, Any]:
+def _manifest(
+    root: Path, revision: str, data: Path, keep_awake: bool, notify_local: bool = False
+) -> dict[str, Any]:
     return {
         "format": 1,
         "label": LABEL,
@@ -306,6 +310,7 @@ def _manifest(root: Path, revision: str, data: Path, keep_awake: bool) -> dict[s
         "data_dir": str(data),
         "testnet_ledger_present": _testnet_ledger_present(data),
         "keep_awake": keep_awake,
+        "notify_local": notify_local,
     }
 
 
@@ -464,7 +469,10 @@ def mutation_lock() -> Iterator[None]:
         os.close(fd)
 
 
-def start(root: Path, env: Mapping[str, str], *, keep_awake: bool, accept: bool) -> None:
+def start(
+    root: Path, env: Mapping[str, str], *, keep_awake: bool, accept: bool,
+    notify_local: bool = False,
+) -> None:
     _require_macos()
     _unsupported_overrides(env)
     revision, root = source_state(root)
@@ -479,7 +487,7 @@ def start(root: Path, env: Mapping[str, str], *, keep_awake: bool, accept: bool)
                 "Kaynak sürümü kayıtlı sürümden farklı; --accept-current-version gerekli."
             )
     data = _data_for_start(root, previous, env)
-    candidate = _manifest(root, revision, data, keep_awake)
+    candidate = _manifest(root, revision, data, keep_awake, notify_local)
     home = _user_home()
     logs = log_paths(home)
     plist = _plist(root, paths, logs, candidate)
@@ -529,6 +537,132 @@ def stop() -> None:
         raise ServiceError("SpotLab servis işi durdurulamadı veya yüklü olduğu doğrulanamadı.")
 
 
+def _restart_paths(root: Path, home: Path) -> None:
+    # Read-only validation: never rotate/chmod logs or create files before stop.
+    for path in (
+        root / "data", service_paths(root)["base"],
+        home / "Library", home / "Library" / "Logs", log_paths(home)["base"],
+    ):
+        metadata = path.lstat()
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid():
+            raise ServiceError("Yeniden başlatma için servis dizini güvenli değil.")
+    paths = service_paths(root)
+    files = [paths["manifest"], paths["plist"], paths["runtime"]]
+    logs = log_paths(home)["base"]
+    files += [logs / ".supervisor.lock"]
+    files += [logs / (name + suffix) for name in ("stdout.log", "stderr.log")
+              for suffix in ("", ".1", ".2", ".3")]
+    for path in files:
+        _safe_existing_file(path)
+        if path.exists() and path.stat().st_nlink != 1:
+            raise ServiceError("Yeniden başlatma için servis dosyası güvenli değil.")
+    for path in (root / ".venv/bin/python", root / ".venv/bin/uvicorn"):
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise ServiceError("Yeniden başlatma için Python ortamı eksik.")
+    for name in ("scripts/run-local.sh", "scripts/service_supervisor.py",
+                 "scripts/node-env.sh", "frontend/node_modules/vite/bin/vite.js"):
+        if not (root / name).is_file():
+            raise ServiceError("Yeniden başlatma için uygulama dosyası eksik.")
+
+
+def _owned_loaded_job(root: Path, paths: Mapping[str, Path]) -> int | None:
+    result = _run(("launchctl", "print", service_target()))
+    # launchctl print is diagnostic text, not a stable API. Accept only the
+    # observed unambiguous top-level fields; format changes must fail closed.
+    expected = {
+        "path": str(paths["plist"]),
+        "program": str(root / ".venv/bin/python"),
+        "working directory": str(root),
+    }
+    if result.returncode or not result.stdout.startswith(service_target() + " = {\n"):
+        raise ServiceError("Yüklü servisin bu kaynak klasörüne ait olduğu doğrulanamadı.")
+    lines = result.stdout.splitlines()
+    for name, value in expected.items():
+        values = [line[len(name) + 4:] for line in lines if line.startswith("\t" + name + " = ")]
+        if values != [value]:
+            raise ServiceError("Yüklü servis başka klasöre ait veya kaydı belirsiz.")
+    expected_arguments = [
+        str(root / ".venv/bin/python"), str(root / "scripts/macos_service.py"),
+        "_run", str(paths["manifest"]),
+    ]
+    block = "\targuments = {\n" + "".join("\t\t" + arg + "\n" for arg in expected_arguments) + "\t}"
+    if result.stdout.count("\targuments = {\n") != 1 or block not in result.stdout:
+        raise ServiceError("Yüklü servisin başlatma komutu doğrulanamadı.")
+    pids = [line.removeprefix("\tpid = ") for line in lines if line.startswith("\tpid = ")]
+    if not pids:
+        return None
+    if len(pids) != 1 or re.fullmatch(r"[1-9][0-9]{0,9}", pids[0]) is None:
+        raise ServiceError("Yüklü servis süreç kimliği belirsiz.")
+    pid = int(pids[0])
+    if pid > 2**31 - 1:
+        raise ServiceError("Yüklü servis süreç kimliği geçersiz.")
+    return pid
+
+
+def _wait_stopped(pid: int | None) -> None:
+    deadline = time.monotonic() + STOP_TIMEOUT
+    absent_message = f'Could not find service "{LABEL}" in domain for user gui: {os.getuid()}'
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ServiceError("Servisin tamamen kapandığı süresi içinde doğrulanamadı.")
+        result = _run(("launchctl", "print", service_target()), timeout=min(2.0, remaining))
+        absent = (
+            result.returncode == 113 and not result.stdout.strip()
+            and result.stderr.strip() in {absent_message, "Bad request.\n" + absent_message}
+        )
+        if result.returncode != 0 and not absent:
+            raise ServiceError("Servis kaydının kaldırıldığı doğrulanamadı.")
+        gone = pid is None
+        if pid is not None:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                gone = True
+            except PermissionError:
+                gone = False
+        if absent and gone:
+            return
+        time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+
+
+def restart(root: Path, env: Mapping[str, str]) -> None:
+    """Explicit same-version stop/start; caller holds mutation_lock throughout."""
+    _require_macos()
+    _unsupported_overrides(env)
+    revision, root = source_state(root)
+    paths = service_paths(root)
+    previous = _load_manifest(paths["manifest"])
+    if previous is None:
+        raise ServiceError("Yeniden başlatma için kayıtlı servis gerekli.")
+    if _pinned_directory(previous["repo_root"], description="kaynak") != root:
+        raise ServiceError("Kayıtlı servis başka kaynak klasörüne ait.")
+    if previous["revision"] != revision:
+        raise ServiceError("Yeniden başlatma sürüm değiştiremez; önce kontrollü güncelleme yapın.")
+    _data_for_start(root, previous, env)
+    home = _user_home()
+    _restart_paths(root, home)
+    prospective = _plist(root, paths, log_paths(home), previous)
+    runtime_path = prospective["EnvironmentVariables"].get("PATH", "")
+    if not shutil.which("npm", path=runtime_path) and not (
+        root / ".tools/npm/bin/npm-cli.js"
+    ).is_file():
+        raise ServiceError("Yeniden başlatma için npm bulunamadı.")
+    if previous["keep_awake"] and not os.access("/usr/bin/caffeinate", os.X_OK):
+        raise ServiceError("Kayıtlı uyku koruması kullanılamıyor.")
+    previous_pid = _owned_loaded_job(root, paths)
+    stop()  # failure must prevent a new bootstrap
+    try:
+        _wait_stopped(previous_pid)
+        start(root, env, keep_awake=previous["keep_awake"], accept=False,
+              notify_local=previous.get("notify_local", False))
+    except (ServiceError, OSError) as exc:
+        raise ServiceError(
+            "Durdurma talebi kabul edildi ancak yeniden başlatma tamamlanamadı; "
+            "status ile kontrol edin."
+        ) from exc
+
+
 def status(root: Path) -> None:
     paths = service_paths(root.resolve())
     logs = log_paths(_user_home())
@@ -554,6 +688,7 @@ def status(root: Path) -> None:
                 "configured_repo_root": str(configured_root),
                 "configured_data_dir": manifest["data_dir"],
                 "manifest_matches_this_checkout": configured_root.resolve() == root.resolve(),
+                "notify_local": manifest.get("notify_local", False),
             }
         )
         snapshot = _load_runtime_snapshot(paths["runtime"])
@@ -715,19 +850,23 @@ def _validated_runtime(manifest_path: Path) -> None:
     ]
     if manifest["keep_awake"]:
         arguments.append("--keep-awake")
+    if manifest.get("notify_local", False):
+        arguments.append("--notify-local")
     os.execve(str(python), arguments, environment)
 
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="SpotLab macOS kullanıcı oturumu servisi")
     commands = result.add_subparsers(
-        dest="command", required=True, metavar="{start,status,stop}"
+        dest="command", required=True, metavar="{start,status,stop,restart}"
     )
     start_parser = commands.add_parser("start", help="Arka planda başlatma isteği gönder")
     start_parser.add_argument("--keep-awake", action="store_true")
     start_parser.add_argument("--accept-current-version", action="store_true")
+    start_parser.add_argument("--notify-local", action="store_true")
     commands.add_parser("status", help="Servis kaydını salt okunur kontrol et")
     commands.add_parser("stop", help="SpotLab arka plan servisini durdur")
+    commands.add_parser("restart", help="Kayıtlı aynı sürümü ve ayarları kontrollü yeniden başlat")
     private = commands.add_parser("_run")
     private.add_argument("manifest", type=Path)
     return result
@@ -749,8 +888,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                         os.environ,
                         keep_awake=args.keep_awake,
                         accept=args.accept_current_version,
+                        notify_local=args.notify_local,
                     )
                     print("SpotLab kullanıcı oturumu servisi başlatma talebi kabul edildi.")
+                elif args.command == "restart":
+                    restart(repo_root(), os.environ)
+                    print(
+                        "SpotLab aynı sürümle yeniden başlatma talebi kabul edildi; "
+                        "status ile kontrol edin."
+                    )
                 else:
                     stop()
                     print("SpotLab kullanıcı oturumu servisi durduruldu; veriler korundu.")

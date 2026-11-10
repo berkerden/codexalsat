@@ -58,6 +58,11 @@ ilerlemesini ayrı gösterir. Eski veya farklı çalışmaya ait yanıt güncel
 sayılmaz. Günlükler toplam 40 MiB sınırıyla döndürülür; hesap kayıtları
 silinmez. Bu kontroller işlem verisinin güncelliği veya kârlılık kanıtı değildir.
 
+İsteğe bağlı `start --keep-awake --notify-local` Mac'te genel servis uyarıları
+göndermeyi dener. `restart`, kayıtlı aynı sürüm ve ayarları ön kontrolden sonra
+bir kez yeniden başlatır. Bildirim sınırları ve kesinti etkileri
+[operasyon belgesinde](docs/OPERATIONS.md#isteğe-bağlı-mac-bildirimleri) açıklanır.
+
 ## Kullanım
 
 1. Genel bakışta parite ve mum periyodunu seçin. Mum grafiği, kotasyon, veri kalitesi

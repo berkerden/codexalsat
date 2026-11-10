@@ -37,6 +37,17 @@ STOP_WAIT = 10.0
 HEALTH_PORTS = (8000, 5173)
 HEALTH_PATH = "/api/health"
 INSTANCE_ENV = "SPOTLAB_SERVICE_INSTANCE_ID"
+NOTIFICATION_TIMEOUT = 2.0
+NOTIFICATION_COOLDOWN = 300.0
+NOTIFICATION_WARNINGS = frozenset(
+    {"http_unresponsive", "worker_attention", "logging_failed"}
+)
+NOTIFICATION_COMMAND = (
+    "/usr/bin/osascript",
+    "-e",
+    'display notification "SpotLab dikkat gerektiriyor. Yerel servis durumunu kontrol edin." '
+    'with title "SpotLab"',
+)
 
 
 class SupervisorError(RuntimeError):
@@ -90,6 +101,145 @@ class RuntimeSnapshot:
             self.value.update(changes)
             self.value["checked_at"] = self.clock()
             _atomic_json(self.path, self.value)
+
+
+def send_local_notification(
+    runner: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+) -> str:
+    """Attempt the one static notification and report process outcome, not delivery."""
+    try:
+        completed = runner(
+            list(NOTIFICATION_COMMAND),
+            shell=False,
+            timeout=NOTIFICATION_TIMEOUT,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return "osascript_exit_0" if completed.returncode == 0 else "osascript_exit_nonzero"
+    except subprocess.TimeoutExpired:
+        return "timeout"
+    except BaseException:
+        return "error"
+
+
+class LocalNotifier:
+    """Best-effort local alerts with one worker and one coalescing slot."""
+
+    def __init__(
+        self,
+        enabled: bool,
+        *,
+        monotonic: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
+        cooldown: float = NOTIFICATION_COOLDOWN,
+        sender: Callable[[], str] | None = None,
+    ):
+        self.enabled = enabled
+        self.monotonic = monotonic
+        self.wall_clock = wall_clock
+        self.cooldown = max(NOTIFICATION_COOLDOWN, cooldown)
+        self.sender = sender if sender is not None else send_local_notification
+        self.condition = threading.Condition()
+        self.pending: str | None = None
+        self.pending_set = False
+        self.closed = False
+        self.last_attempt_monotonic: float | None = None
+        self.last_attempt: float | None = None
+        self.last_result: str | None = None
+        self.worker: threading.Thread | None = None
+        if enabled:
+            try:
+                worker = threading.Thread(target=self._run, daemon=True)
+                worker.start()
+                self.worker = worker
+            except BaseException:
+                self.worker = None
+                self.last_result = "worker_start_error"
+
+    def transition(self, warning: str | None) -> None:
+        """Record the newest alert transition without delaying health checks."""
+        if (
+            not self.enabled
+            or self.worker is None
+            or (warning is not None and warning not in NOTIFICATION_WARNINGS)
+        ):
+            return
+        with self.condition:
+            if self.closed:
+                return
+            self.pending = warning
+            self.pending_set = True
+            self.condition.notify()
+
+    def _record(self, attempted_at: float, result: str) -> None:
+        with self.condition:
+            self.last_attempt = attempted_at
+            self.last_result = result
+
+    def status(self) -> dict[str, Any]:
+        with self.condition:
+            return {
+                "enabled": self.enabled,
+                "last_attempt": self.last_attempt,
+                "last_result": self.last_result,
+            }
+
+    def _attempt(self) -> None:
+        attempted_at = self.wall_clock()
+        # Every attempt consumes the cooldown, including timeouts and launch errors.
+        self.last_attempt_monotonic = self.monotonic()
+        result = "error"
+        try:
+            result = self.sender()
+        except subprocess.TimeoutExpired:
+            result = "timeout"
+        except BaseException:
+            result = "error"
+        self._record(attempted_at, result)
+
+    def _run(self) -> None:
+        event: str | None = None
+        while True:
+            try:
+                with self.condition:
+                    while not self.closed and event is None and not self.pending_set:
+                        self.condition.wait()
+                    if self.closed:
+                        return
+                    if self.pending_set:
+                        event = self.pending
+                        self.pending = None
+                        self.pending_set = False
+                    while not self.closed and self.last_attempt_monotonic is not None:
+                        remaining = self.cooldown - (
+                            self.monotonic() - self.last_attempt_monotonic
+                        )
+                        if remaining <= 0:
+                            break
+                        self.condition.wait(remaining)
+                        if self.pending_set:
+                            event = self.pending
+                            self.pending = None
+                            self.pending_set = False
+                    if self.closed:
+                        return
+                if event in NOTIFICATION_WARNINGS:
+                    self._attempt()
+                event = None
+            except BaseException:
+                # Nothing in this worker may affect supervision or the child.
+                event = None
+
+    def close(self) -> None:
+        with self.condition:
+            self.closed = True
+            self.pending = None
+            self.pending_set = False
+            self.condition.notify_all()
+        if self.worker is not None:
+            self.worker.join(timeout=NOTIFICATION_TIMEOUT + 0.5)
 
 
 class RotatingBinaryLog:
@@ -388,6 +538,7 @@ class HealthMonitor:
         self, instance_id: str, snapshot: RuntimeSnapshot, stop: threading.Event, *,
         ports: Sequence[int] = HEALTH_PORTS, monotonic: Callable[[], float] = time.monotonic,
         probe: Callable[[int, str], dict[str, Any]] = probe_health,
+        notifier: LocalNotifier | None = None,
     ):
         self.instance_id = instance_id
         self.snapshot = snapshot
@@ -395,6 +546,7 @@ class HealthMonitor:
         self.ports = ports
         self.monotonic = monotonic
         self.probe = probe
+        self.notifier = notifier
 
     def run(self) -> None:
         began = self.monotonic()
@@ -427,10 +579,20 @@ class HealthMonitor:
             if warning != previous_warning:
                 transition = {"at": time.time(), "warning": warning}
                 previous_warning = warning
+                if self.notifier is not None:
+                    try:
+                        self.notifier.transition(warning)
+                    except BaseException:
+                        pass
             self.snapshot.update(
                 components=components,
                 current_warning=warning,
                 last_transition=transition,
+                notifications=(
+                    self.notifier.status()
+                    if self.notifier is not None
+                    else {"enabled": False, "last_attempt": None, "last_result": None}
+                ),
             )
             next_check += POLL_INTERVAL
             now = self.monotonic()
@@ -475,6 +637,11 @@ def supervise(args: argparse.Namespace, environment: Mapping[str, str] = os.envi
         "root": str(root), "supervisor_pid": os.getpid(), "phase": "starting",
         "components": {}, "logging": {"failed": False}, "current_warning": None,
         "last_transition": {"at": time.time(), "warning": None},
+        "notifications": {
+            "enabled": bool(getattr(args, "notify_local", False)),
+            "last_attempt": None,
+            "last_result": None,
+        },
     }
     snapshot = RuntimeSnapshot(snapshot_path, base)
     snapshot.update()
@@ -488,6 +655,7 @@ def supervise(args: argparse.Namespace, environment: Mapping[str, str] = os.envi
     drainers: list[threading.Thread] = []
     monitor: threading.Thread | None = None
     monitor_failed = threading.Event()
+    notifier = LocalNotifier(bool(getattr(args, "notify_local", False)))
     try:
         stdout_log.open()
         stderr_log.open()
@@ -520,7 +688,7 @@ def supervise(args: argparse.Namespace, environment: Mapping[str, str] = os.envi
             thread.start()
         def monitor_health() -> None:
             try:
-                HealthMonitor(instance_id, snapshot, monitor_stop).run()
+                HealthMonitor(instance_id, snapshot, monitor_stop, notifier=notifier).run()
             except BaseException:
                 monitor_failed.set()
 
@@ -548,6 +716,8 @@ def supervise(args: argparse.Namespace, environment: Mapping[str, str] = os.envi
         raise
     finally:
         monitor_stop.set()
+        with contextlib.suppress(BaseException):
+            notifier.close()
         if child is not None:
             for pipe in (child.stdout, child.stderr):
                 if pipe is not None:
@@ -576,6 +746,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--snapshot", type=Path, required=True)
     result.add_argument("--revision", required=True)
     result.add_argument("--keep-awake", action="store_true")
+    result.add_argument("--notify-local", action="store_true")
     return result
 
 

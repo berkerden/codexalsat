@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -205,3 +206,178 @@ def test_drainer_keeps_consuming_after_disk_failure(supervisor: ModuleType) -> N
     assert failed.is_set()
     assert source.consumed == supervisor.READ_SIZE * 3
     assert source.closed
+
+
+def test_local_notifications_are_opt_in_and_use_only_static_osascript(
+    supervisor: ModuleType,
+) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0)
+
+    assert supervisor.send_local_notification(run) == "osascript_exit_0"
+    assert len(calls) == 1
+    calls.clear()
+
+    sends: list[None] = []
+
+    def send() -> str:
+        sends.append(None)
+        return "osascript_exit_0"
+
+    disabled = supervisor.LocalNotifier(False, sender=send)
+    disabled.transition("worker_attention")
+    disabled.close()
+    assert sends == []
+
+    notifier = supervisor.LocalNotifier(True, sender=send)
+    notifier.transition("worker_attention")
+    deadline = time.monotonic() + 1.0
+    while notifier.status()["last_result"] is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    notifier.close()
+
+    assert len(sends) == 1
+    assert supervisor.send_local_notification(run) == "osascript_exit_0"
+    command, kwargs = calls[0]
+    assert command == list(supervisor.NOTIFICATION_COMMAND)
+    assert command[0] == "/usr/bin/osascript"
+    assert kwargs["shell"] is False
+    assert kwargs["timeout"] == 2.0
+    assert kwargs["stdin"] is subprocess.DEVNULL
+    assert kwargs["stdout"] is subprocess.DEVNULL
+    assert kwargs["stderr"] is subprocess.DEVNULL
+    notification = notifier.status()
+    assert notification["last_result"] == "osascript_exit_0"
+    assert "delivered" not in notification["last_result"]
+
+
+def test_notification_timeout_consumes_shared_cooldown_and_burst_is_nonblocking(
+    supervisor: ModuleType,
+) -> None:
+    calls: list[list[str]] = []
+    clock_value = [10.0]
+    first_call = threading.Event()
+
+    def clock() -> float:
+        return clock_value[0]
+
+    def send() -> str:
+        calls.append(list(supervisor.NOTIFICATION_COMMAND))
+        first_call.set()
+        raise subprocess.TimeoutExpired(supervisor.NOTIFICATION_COMMAND, 2.0)
+
+    notifier = supervisor.LocalNotifier(
+        True, monotonic=clock, sender=send
+    )
+    began = time.monotonic()
+    for warning in (
+        "http_unresponsive",
+        "worker_attention",
+        "logging_failed",
+    ):
+        notifier.transition(warning)
+    assert time.monotonic() - began < 0.1
+    assert first_call.wait(1.0)
+    deadline = time.monotonic() + 1.0
+    while notifier.status()["last_result"] is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert len(calls) == 1
+    notification = notifier.status()
+    assert notification["last_result"] == "timeout"
+
+    notifier.transition("worker_attention")
+    time.sleep(0.05)
+    assert len(calls) == 1
+    notifier.transition(None)
+    clock_value[0] += supervisor.NOTIFICATION_COOLDOWN
+    # Clearing a warning cancels a coalesced stale alert and emits no recovery.
+    notifier.transition(None)
+    time.sleep(0.05)
+    assert len(calls) == 1
+    # A recurrence after the shared cooldown is eligible again.
+    notifier.transition("logging_failed")
+    deadline = time.monotonic() + 1.0
+    while len(calls) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    notifier.close()
+    assert len(calls) == 2
+
+
+def test_notification_failures_and_close_never_escape(supervisor: ModuleType) -> None:
+    def broken_sender() -> str:
+        raise OSError("osascript unavailable")
+
+    notifier = supervisor.LocalNotifier(True, sender=broken_sender)
+    notifier.transition("http_unresponsive")
+    time.sleep(0.05)
+    notifier.close()
+    notifier.transition("logging_failed")
+    assert notifier.worker is not None
+    assert not notifier.worker.is_alive()
+
+
+def test_notification_worker_start_failure_is_advisory(
+    supervisor: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_start(_thread: threading.Thread) -> None:
+        raise RuntimeError("thread capacity exhausted")
+
+    monkeypatch.setattr(supervisor.threading.Thread, "start", fail_start)
+    notifier = supervisor.LocalNotifier(True, sender=lambda: "should_not_run")
+    notifier.transition("worker_attention")
+    notifier.close()
+
+    assert notifier.worker is None
+    notification = notifier.status()
+    assert notification == {
+        "enabled": True,
+        "last_attempt": None,
+        "last_result": "worker_start_error",
+    }
+
+
+def test_slow_notifier_never_writes_snapshots_or_delays_health(
+    supervisor: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    sending = threading.Event()
+    release = threading.Event()
+    stop = threading.Event()
+    writes: list[dict[str, object]] = []
+
+    def sender() -> str:
+        sending.set()
+        release.wait(2)
+        return 'osascript_exit_0'
+
+    def forbidden_write(*args: object) -> None:
+        pytest.fail('notification worker must not write files')
+
+    monkeypatch.setattr(supervisor, '_atomic_json', forbidden_write)
+    notifier = supervisor.LocalNotifier(True, sender=sender)
+    try:
+        notifier.transition('http_unresponsive')
+        assert sending.wait(1)
+        snapshot = SimpleNamespace(value={}, update=lambda **changes: writes.append(changes))
+
+        def probe(port: int, instance: str) -> dict[str, object]:
+            stop.set()
+            return health(instance, state='stalled')
+
+        monitor = supervisor.HealthMonitor('a' * 32, snapshot, stop, probe=probe, notifier=notifier)
+        # Let exactly one health cycle run; the probe ends further scheduling.
+        stop.clear()
+        began = time.monotonic()
+        monitor.run()
+        assert time.monotonic() - began < 0.5
+        assert len(writes) == 1
+        assert writes[0]['current_warning'] == 'worker_attention'
+        assert writes[0]['notifications']['last_result'] is None
+    finally:
+        release.set()
+        notifier.close()
+    assert notifier.status()['last_result'] == 'osascript_exit_0'
