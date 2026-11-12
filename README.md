@@ -93,6 +93,10 @@ USDT kotasyon tutarı, risksiz veya bire bir USD nakit garantisi değildir.
 
 ## Test ve güvenlik
 
+CI'daki ayrı PostgreSQL kurtarma işi, yapay hesap ve emir kayıtlarını gerçek
+`pg_dump`/`pg_restore` araçlarıyla boş hedefe yükleyerek karşılaştırır.
+Kapsam ve fiziksel yedekten farkı [kurtarma belgesinde](docs/OPERATIONS.md#postgresql-mantıksal-yedeğin-geri-dönüş-denemesi).
+
 ```bash
 source .venv/bin/activate
 python -m pytest

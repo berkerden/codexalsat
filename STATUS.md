@@ -1,4 +1,4 @@
-# Durum — 2026-11-10
+# Durum — 2026-11-12
 
 Public kaynak depo: [berkerden/codexalsat](https://github.com/berkerden/codexalsat).
 Kararlı kaynak dalı main; canlı kullanım öncesi kalan işler issue #2'de izlenir.
@@ -19,7 +19,22 @@ operasyon geçmişi içermez. Üretim işlemleri kod içinde kapalıdır.
 - İleri paper gözlem kaydı: örneklenen sağlıklı kapsam ile takvim süresi ayrı,
   ayar/kod kimliği ve devralınmış geçmiş görünür; JSON rapor indirilebilir.
 
-## Son paket: yerel bildirim ve kontrollü yeniden başlatma
+## Son paket: PostgreSQL mantıksal yedekten dönüş denemesi
+
+Ayrı CI işi, geçici PostgreSQL 16 üzerinde yapay sanal hesap ve Testnet
+kayıtlarını `pg_dump` ile alıp boş başka veritabanına `pg_restore` ile yükler.
+Uygulama açılmadan önce şema ve tüm satırlar karşılaştırılır; ardından açılışın
+giriş yetkisini kapatırken mali kayıtları, arşivleri, gözlem geçmişini ve hesap
+bağlarını koruması kontrol edilir. Eski koruma gözlemi güncel borsa koruması
+sayılmaz; izleyici kendiliğinden işlem yetkisi kazanmaz.
+
+Bozuk arşiv, dolu hedef ve değiştirilmiş/eksik satır hata koşullarıdır. Test
+kullanıcı veritabanı veya borsa anahtarı kabul etmez; yedek arşivi yayımlanmaz.
+Son başarılı/başarısız çalışmanın kanıtı ilgili PR'nin ayrı kurtarma işindedir.
+Bu, fiziksel temel yedek, WAL ile belirli ana dönüş veya üretim kurtarma
+süresi kanıtı değildir. Uygulamanın işlem ve risk kararları değişmez.
+
+## Önceki paket: yerel bildirim ve kontrollü yeniden başlatma
 
 `start --notify-local` mevcut izleme sürecinin fark ettiği sorunlar için
 kişisel bilgi içermeyen Mac bildirimi göndermeyi dener. Varsayılan kapalıdır.

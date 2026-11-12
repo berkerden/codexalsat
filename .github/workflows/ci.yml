@@ -49,6 +49,35 @@ jobs:
       - run: python -m build --wheel
       - run: python -m pip_audit
 
+  postgres-recovery:
+    name: PostgreSQL recovery drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: spotlab_recovery
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.lock
+      - run: python -m pip install ".[dev]"
+      - name: Restore synthetic ledgers into isolated empty databases
+        env:
+          SPOTLAB_REQUIRE_POSTGRES_RECOVERY: "1"
+          TEST_POSTGRES_RECOVERY_CONTAINER: ${{ job.services.postgres.id }}
+        run: python -m pytest backend/tests/test_postgres_recovery.py -o addopts='' -v
+
   frontend:
     name: Frontend checks
     runs-on: ubuntu-latest

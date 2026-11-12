@@ -362,9 +362,39 @@ kapalı bırakır. Panelde geri yükleme veya arşiv silme yolu bulunmaz.
 
 Yedekler kişisel veri içerir; Git'e veya genel paylaşıma yüklenmez.
 
-PostgreSQL için backend kapalıyken `pg_dump` alın; boş ayrı test veritabanına
-`pg_restore` yapıp `/api/paper` bakiyeleri/pozisyonları/fill sayılarıyla karşılaştırın.
-Bu makinede PostgreSQL fiziksel dump/restore uygulanmadı; üretim öncesi dış engeldir.
+### PostgreSQL mantıksal yedeğin geri dönüş denemesi
+
+`pg_dump` mantıksal yedek üretir; fiziksel sunucu yedeği değildir.
+[PostgreSQL 16 yedekleme belgesi](https://www.postgresql.org/docs/16/backup-dump.html)
+ve [geri yükleme seçenekleri](https://www.postgresql.org/docs/16/app-pgrestore.html)
+bu ayrımı ve arşiv biçimlerini açıklar.
+
+CI'daki ayrı **PostgreSQL recovery drill** işi, geçici PostgreSQL 16 sunucusunda
+yapay bir kaynak veritabanı ile ayrı boş hedefler oluşturur. `pg_dump` ve
+`pg_restore` sunucuyla aynı imajdan çalışır. Özel biçimli arşiv, tek işlemde
+ve ilk hatada durarak yüklenir. Mevcut hedefi temizleme veya üzerine yazma
+seçeneği kullanılmaz. Bu doğrulama kullanıcı veritabanı, borsa anahtarı veya
+harici bir yedek dosyası kabul etmez; arşivler GitHub çıktısı olarak yüklenmez.
+
+Uygulama açılmadan önce tablo ve kayıtların tamamı karşılaştırılır. Ardından
+ayrı olarak uygulama başlangıcının yeni sanal girişleri kapattığı; açık
+pozisyonu, dolumları, arşivleri ve gözlem geçmişini koruduğu kontrol edilir.
+PostgreSQL arşivinden dönüş etkin oturum kimliğini korur; yukarıda açıklanan
+uygulama JSON yedeğiyle geri yükleme ise yeni etkin oturum kimliği oluşturur.
+Testnet hesap bağı ve kalıcı engeller korunmalıdır; geri yükleme borsayla
+uzlaştırma veya yeniden işlem yetkisi anlamına gelmez.
+
+Bozuk arşiv, dolu hedef ve kayıt uyuşmazlığı da denemenin hata koşullarıdır.
+Gerekli PostgreSQL/Docker ortamı bu CI işinde eksikse iş başarısız olur;
+yerel testlerde bu ayrı entegrasyon denemesi atlanabilir. Son çalışmanın
+sonucu ilgili PR'daki CI kaydında görülebilir.
+
+Gerçek kurtarmada tüm ilgili uygulama yazıcılarını durdurun, özgün kayıtları
+koruyun ve güvenilir yedeği önce ayrı boş hedefte doğrulayın. Bu deneme
+rolleri, tablespace ayarlarını, dış diskte saklamayı, büyük veriyle kurtarma
+süresini veya fiziksel temel yedek ve WAL ile belirli ana dönüşü doğrulamaz.
+[Fiziksel yedek ve zaman noktasına dönüş](https://www.postgresql.org/docs/16/continuous-archiving.html)
+ayrı kabul koşullarıdır. Mac'teki SQLite hesabı bu CI denemesine taşınmaz.
 
 ## Kesinti
 
