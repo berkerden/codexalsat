@@ -394,7 +394,47 @@ koruyun ve güvenilir yedeği önce ayrı boş hedefte doğrulayın. Bu deneme
 rolleri, tablespace ayarlarını, dış diskte saklamayı, büyük veriyle kurtarma
 süresini veya fiziksel temel yedek ve WAL ile belirli ana dönüşü doğrulamaz.
 [Fiziksel yedek ve zaman noktasına dönüş](https://www.postgresql.org/docs/16/continuous-archiving.html)
-ayrı kabul koşullarıdır. Mac'teki SQLite hesabı bu CI denemesine taşınmaz.
+ayrı kabul koşullarıdır; aşağıdaki deneme bu yolu ayrıca sınar.
+Mac'teki SQLite hesabı bu CI denemelerine taşınmaz.
+
+### PostgreSQL fiziksel yedek ve zamana dönüş denemesi
+
+Ayrı **PostgreSQL point-in-time recovery** CI işi, yalnız kendi oluşturduğu
+geçici PostgreSQL 16 ortamını kullanır. `pg_basebackup` fiziksel temel yedeği
+alır, `pg_verifybackup` dosyaları ve yedeğin gerekli WAL kayıtlarını denetler.
+Ardından arşivlenmiş WAL kayıtları, seçilen UTC zamana kadar geri oynatılır.
+Deneme kullanıcı bağlantı adresi, veritabanı, yedek veya borsa anahtarı kabul
+etmez. Yedek/WAL dosyaları yayımlanmaz; test ortamı sonunda kaldırılır.
+
+Zaman sınırının kanıtı için temel yedekten sonra, hedef zamandan önce ve sonra
+ayrı işlemler yapılır. Kurtarılan kayıtların hedef öncesi görüntüyle eşleşmesi
+ve hedef sonrası değişiklikleri içermemesi gerekir. Hedefte duraklatılmış
+sunucu salt okunur incelenir. Test kurtarmayı açıkça tamamladıktan sonra
+uygulamanın kayıt yazan açılış işlemleri çalıştırılır. Bu aşamada sanal
+giriş yetkisi kapanmalı, geçmiş korunmalı ve Testnet izleyicisi kapalı kalmalıdır.
+
+Bozulmuş temel yedek ve eksik gerekli WAL zinciri de başarısızlık koşullarıdır.
+`pg_verifybackup` başarısı tek başına geri yükleme kanıtı sayılmaz; gerçek
+sunucu açılışı ve kayıt karşılaştırması ayrıca gerekir.
+[Resmî fiziksel kurtarma belgesi](https://www.postgresql.org/docs/16/continuous-archiving.html),
+[yedek doğrulama sınırları](https://www.postgresql.org/docs/16/app-pgverifybackup.html)
+ve [hedef zaman ayarları](https://www.postgresql.org/docs/16/runtime-config-wal.html#RUNTIME-CONFIG-WAL-RECOVERY-TARGET)
+bu ayrımları açıklar.
+
+Docker bulunan bir test makinesinde, proje bağımlılıkları kurulduktan sonra:
+
+```bash
+docker pull postgres:16-alpine
+SPOTLAB_REQUIRE_POSTGRES_PITR=1 python -m pytest backend/tests/test_postgres_pitr.py -o addopts='' -v
+```
+
+İstek açıkken eksik Docker veya başarısız kurtarma testi atlanmaz; hata verir.
+Normal yerel test çalıştırması bu ayrı entegrasyonu atlar. Son native sonuç
+ilgili PR'nin CI kaydındadır. Bu küçük yapay veri denemesi; farklı makineye
+şifreli yedek aktarımı, saklama politikası, özel roller/tablespace düzeni,
+büyük veriyle kurtarma süresi veya gerçek hesapta borsa uzlaştırması değildir.
+Gerçek bir olayda hedef zaman sonrasındaki borsa işlemleri geri alınmış olmaz;
+eski veritabanıyla otomatik işlem açılmadan önce ayrıca uzlaştırılmalıdır.
 
 ## Kesinti
 

@@ -1,4 +1,4 @@
-# Durum — 2026-11-12
+# Durum — 2026-11-13
 
 Public kaynak depo: [berkerden/codexalsat](https://github.com/berkerden/codexalsat).
 Kararlı kaynak dalı main; canlı kullanım öncesi kalan işler issue #2'de izlenir.
@@ -19,7 +19,21 @@ operasyon geçmişi içermez. Üretim işlemleri kod içinde kapalıdır.
 - İleri paper gözlem kaydı: örneklenen sağlıklı kapsam ile takvim süresi ayrı,
   ayar/kod kimliği ve devralınmış geçmiş görünür; JSON rapor indirilebilir.
 
-## Son paket: PostgreSQL mantıksal yedekten dönüş denemesi
+## Son paket: PostgreSQL fiziksel yedekten zamana dönüş denemesi
+
+Ayrı CI işi, kendi geçici PostgreSQL 16 ortamında fiziksel temel yedek ve
+arşivlenmiş WAL ile seçilen UTC zamana geri dönüşü sınar. Temel yedekten
+sonraki kayıtların geri gelmesi, hedef zamandan sonraki değişikliklerin dışarıda
+kalması ve hedef öncesi tam kayıt görüntüsüyle eşleşme kabul koşullarıdır.
+Duraklatılmış kurtarma salt okunur doğrulanır; uygulama açılışı ayrı aşamadır.
+Bozuk temel yedek ve eksik gerekli WAL başarı olarak kabul edilmez.
+
+Gerçek hesap veya yedek kullanılmaz; işlem ve risk kodu değişmez. Mac'teki
+SQLite hesabı taşınmaz. Yerel ortamda Docker yoksa native deneme yalnız ayrı
+CI işinde çalışır; sonuç kanıtı ilgili PR'dadır. Farklı sunucuda yedek saklama,
+büyük veriyle kurtarma süresi ve gerçek hesap uzlaştırması ayrıca gereklidir.
+
+## Önceki paket: PostgreSQL mantıksal yedekten dönüş denemesi
 
 Ayrı CI işi, geçici PostgreSQL 16 üzerinde yapay sanal hesap ve Testnet
 kayıtlarını `pg_dump` ile alıp boş başka veritabanına `pg_restore` ile yükler.
@@ -157,7 +171,8 @@ Lint, tip, derleme, gizli bilgi ve bağımlılık kontrolleri başarılı.
   envanter; araştırmada mum içi portföy düşüşü bu paketle tamamlanmış değildir.
 - En az 30 takvim günü ileri paper gözlem, yeterli bağımsız örneklem dışı kanıt,
   maliyet stresi ve piyasa koşulları. Yazılım testleri ekonomik avantaj değildir.
-- Bağımsız kesinti bildirimi/kurtarma, fiziksel PostgreSQL kurtarma, Docker ve güvenli uzak işletim
+- Bağımsız kesinti bildirimi/kurtarma, sunucular arası yedek saklama ve geri dönüş,
+  Docker uygulama kurulumu ve güvenli uzak işletim
   doğrulaması; son bağımsız üretim incelemesi ve uygulama içi açık kullanıcı onayı.
 
 Kurulum ve kurtarma: [OPERATIONS.md](docs/OPERATIONS.md).

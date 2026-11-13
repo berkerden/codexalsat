@@ -96,6 +96,9 @@ USDT kotasyon tutarı, risksiz veya bire bir USD nakit garantisi değildir.
 CI'daki ayrı PostgreSQL kurtarma işi, yapay hesap ve emir kayıtlarını gerçek
 `pg_dump`/`pg_restore` araçlarıyla boş hedefe yükleyerek karşılaştırır.
 Kapsam ve fiziksel yedekten farkı [kurtarma belgesinde](docs/OPERATIONS.md#postgresql-mantıksal-yedeğin-geri-dönüş-denemesi).
+Fiziksel yedek ve WAL kayıtlarıyla seçilen zamana dönüş için ayrı bir CI işi
+bulunur; [PITR denemesinin kapsamı](docs/OPERATIONS.md#postgresql-fiziksel-yedek-ve-zamana-dönüş-denemesi)
+gerçek hesapların yedeklenmesi veya üretim kurtarma garantisi anlamına gelmez.
 
 ```bash
 source .venv/bin/activate
