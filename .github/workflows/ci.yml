@@ -78,6 +78,24 @@ jobs:
           TEST_POSTGRES_RECOVERY_CONTAINER: ${{ job.services.postgres.id }}
         run: python -m pytest backend/tests/test_postgres_recovery.py -o addopts='' -v
 
+  postgres-pitr:
+    name: PostgreSQL point-in-time recovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.lock
+      - run: python -m pip install ".[dev]"
+      - run: docker pull postgres:16-alpine
+      - name: Recover synthetic ledgers to a selected time
+        env:
+          SPOTLAB_REQUIRE_POSTGRES_PITR: "1"
+        run: python -m pytest backend/tests/test_postgres_pitr.py -o addopts='' -v
+
   frontend:
     name: Frontend checks
     runs-on: ubuntu-latest
