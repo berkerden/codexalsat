@@ -128,12 +128,22 @@ etkilenen kayıtları inceleyin; geçmiş temizliğini ayrı, kontrollü planlay
 ```bash
 cp .env.example .env
 # .env içinde yerel parola ve DATABASE_URL'u eşleştirin.
-docker compose --profile web up --build
+export SPOTLAB_BUILD_REVISION="$(git rev-parse HEAD)"
+docker compose up --build --wait
 ```
 
-Portlar yalnız `127.0.0.1` üzerinden açılır. PostgreSQL ve piyasa verileri ayrı
-kalıcı volume'larda tutulur. Docker olmayan bu geliştirme makinesinde Compose
-çalıştırması henüz doğrulanmadı; PostgreSQL yolu CI'da sınanır.
+Temiz ve commit edilmiş kaynakla derleyin. Panel `http://127.0.0.1:5173`,
+API `http://127.0.0.1:8000` adresindedir; portlar yalnız yerel erişime açıktır.
+Paper kayıtları PostgreSQL volume'unda, mevcut varsayılan Testnet SQLite defteri
+ve piyasa dosyaları ayrı `market-data` volume'unda kalır. Kaynak değişince yeniden
+derleyin; panel dosyaları artık bilgisayardan bağlanan bir klasöre dayanmaz.
+Python ve Node bağımlılıkları kilit dosyalarından kurulur. API, imaja kaydedilen
+kaynak sürümünü bildirir; sürüm verilmezse `uncommitted` görünür.
+
+Ayrı CI işi temiz kaynak arşivinden üç servisi kurar, yapay kayıtların yeniden
+oluşturulan servislerde korunmasını ve gerçek tarayıcı/proxy akışını sınar.
+Mac'te Docker kurulumu bu testin parçası değildir. Ayrıntılar ve sınırlar
+[operasyon belgesinde](docs/OPERATIONS.md#docker-ile-temiz-kurulum-doğrulaması).
 Sunucuya geçiş ayrı HTTPS/kimlik doğrulama, secret saklama, izleme ve yedekleme
 kurulumu gerektirir. Ücretli hizmet otomatik başlatılmaz.
 

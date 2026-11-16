@@ -65,6 +65,8 @@ TRUSTED_LOOPBACK_ORIGINS = frozenset(
 )
 WORKER_STALL_SECONDS = 300.0
 SERVICE_INSTANCE_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
+BUILD_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+BUILD_REVISION_PATH = Path("/app/BUILD_REVISION")
 
 
 def service_instance_id() -> str:
@@ -111,11 +113,18 @@ async def paper_data_read(awaitable: Any, stage: str) -> Any:
 
 def version() -> str:
     try:
-        return subprocess.check_output(
+        revision = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, text=True, timeout=2
         ).strip()
     except (OSError, subprocess.SubprocessError):
+        revision = ""
+    if BUILD_REVISION_PATTERN.fullmatch(revision):
+        return revision
+    try:
+        revision = BUILD_REVISION_PATH.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
         return "uncommitted"
+    return revision if BUILD_REVISION_PATTERN.fullmatch(revision) else "uncommitted"
 
 
 def wire(value: Any) -> Any:
