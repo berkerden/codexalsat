@@ -485,6 +485,61 @@ Paper fee varsayımı quote asset'tir. BNB veya base komisyonu ve gerçek accoun
 reconciliation tamamlanmadan gerçek para moduna geçilemez. Testnet sonuçları gerçek
 likidite/başarı kanıtı değildir. Canlı anahtarları sohbet, frontend veya Git'e yazmayın.
 
+## Docker ile temiz kurulum doğrulaması
+
+Compose; PostgreSQL, API ve paneli birlikte oluşturur. API veritabanının,
+panel de API'nin hazır olmasını bekler. Panel bir Node imajından çalışır;
+yerel `node_modules` veya kaynak klasörü bağlanmaz. Python/Node bağımlılıkları
+deponun kilit dosyalarından kurulur; temel imaj etiketleri değişebileceğinden
+bu, byte düzeyinde aynı imajın yeniden üretileceği iddiası değildir.
+
+Temiz, commit edilmiş clone'da `.env.example` dosyasını `.env` olarak kopyalayın;
+PostgreSQL parolasını ve `DATABASE_URL` içindeki karşılığını yerelde düzenleyin.
+Sürümü kaydederek başlatın:
+
+```bash
+export SPOTLAB_BUILD_REVISION="$(git rev-parse HEAD)"
+docker compose up --build --wait
+docker compose ps
+```
+
+Varsayılan panel portu 5173'tür. `WEB_PORT` ile farklı bir port seçilebilir;
+Testnet'in işlem değiştiren panel kontrolleri yalnız mevcut sabit yerel güvenilir
+kaynaklarda desteklenir. Farklı porttaki salt okunur kontrol bu izinleri genişletmez.
+Panel/API sağlık kontrolü yalnız erişilebilirliği gösterir; veri kalitesi ve
+ekonomik avantaj ayrı değerlendirilir. API'nin bildirdiği sürüm, derleme sırasında
+kaydedilen tam commit kimliğidir. Geçersiz bir derleme kimliği imaj oluşturmayı
+durdurur; kimlik verilmemişse API `uncommitted` gösterir.
+
+Paper defteri PostgreSQL'dedir. Testnet varsayılanı mevcut davranışla aynı kalır:
+`market-data` volume'undaki SQLite defteri. Bu kurulum eski Testnet kayıtlarını
+PostgreSQL'e taşımaz. Her iki volume'u da koruyun ve yedekleyin. Normal durdurma:
+
+```bash
+docker compose down
+```
+
+Bu komuta `--volumes` eklemek kalıcı hesap kayıtlarını silebilir. Yalnız yazılım
+güncellemek için volume silmeyin. Kaynak değişikliğinde açık işlemleri değerlendirip
+uygulamayı kontrollü durdurun, yedek alın ve yeni sürümü açıkça yeniden derleyin.
+
+**Clean Compose application** CI işi, yalnız commit edilmiş kaynakları yeni bir
+geçici klasöre çıkarır. Kendi rastgele proje adını, parolasını, yerel portlarını
+ve volume'larını kullanır; yerel `.env`, hesap veya anahtar almaz. Yalnız test API'sine
+eklenen erişilemeyen yerel HTTP vekili, piyasa sorgularını başarısız kılar;
+gerçek piyasa yanıtı kullanılmadan 503 hata yolu da doğrulanır. Bu, ağ seviyesinde
+tam dış erişim engeli değildir. Yapay paper arşivi ve Testnet defteriyle yeniden
+başlatma/kalıcılık kontrol edilir; API açılışı yeni sanal giriş yetkisini kapatır.
+Tarayıcı API yanıtlarını taklit etmeden panel/proxy üzerinden kayıtları okur.
+Test sonundaki volume temizliği yalnız bu geçici projeye aittir.
+
+Native sonuç ilgili PR'nin CI kaydındadır. Bu doğrulama Binance bağlantı kalitesi,
+gerçek hesap taşıma, sunucular arası yedek saklama veya internetten güvenli erişim
+kanıtı değildir. Linux CI'da Docker çalışması, Mac'te Docker kurulduğu anlamına gelmez.
+[Compose başlangıç sırası](https://docs.docker.com/compose/how-tos/startup-order/)
+ve [hazır olmayı bekleyen başlatma](https://docs.docker.com/reference/cli/docker/compose/up/)
+resmî belgelerde açıklanır.
+
 ## Sunucuya geçiş
 
 Aynı uygulama Docker/PostgreSQL ile ayrı, sürekli açık Linux makinede çalıştırılabilir.

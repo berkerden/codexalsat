@@ -8,7 +8,13 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    proxy: { '/api': process.env.API_PROXY_TARGET ?? 'http://127.0.0.1:8000' },
+    proxy: {
+      '/api': {
+        target: process.env.API_PROXY_TARGET ?? 'http://127.0.0.1:8000',
+        // Preserve the client's host so the API can enforce its loopback allowlist.
+        changeOrigin: false,
+      },
+    },
   },
   preview: { host: '127.0.0.1', port: 4173, strictPort: true },
   test: {

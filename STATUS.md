@@ -1,4 +1,4 @@
-# Durum — 2026-11-13
+# Durum — 2026-11-14
 
 Public kaynak depo: [berkerden/codexalsat](https://github.com/berkerden/codexalsat).
 Kararlı kaynak dalı main; canlı kullanım öncesi kalan işler issue #2'de izlenir.
@@ -19,7 +19,21 @@ operasyon geçmişi içermez. Üretim işlemleri kod içinde kapalıdır.
 - İleri paper gözlem kaydı: örneklenen sağlıklı kapsam ile takvim süresi ayrı,
   ayar/kod kimliği ve devralınmış geçmiş görünür; JSON rapor indirilebilir.
 
-## Son paket: PostgreSQL fiziksel yedekten zamana dönüş denemesi
+## Son paket: temiz Docker Compose uygulama doğrulaması
+
+Ayrı CI işi, commit edilmiş kaynaklardan PostgreSQL/API/panel kurulumunu gerçek
+Docker ortamında sınar. Python/Node kilit dosyaları, imaj kaynak sürümü, servis
+hazırlığı, yerel portlar ve kalıcı volume'lar doğrulanır. Gerçek tarayıcı ve proxy
+üzerinden paper/arşiv/Testnet salt okunur ekranları, API yanıtı taklit edilmeden
+kontrol edilir. Native sonuç kanıtı ilgili PR'dadır.
+
+Paper PostgreSQL'de; Testnet mevcut varsayılan SQLite volume'unda kalır.
+Kayıt taşıma veya yeni işlem yetkisi yoktur. Testte yalnız yapay hesap kullanılır;
+API durdurularak hazırlanan yetki, yeniden açılışta kapanmalıdır. Bağımsız uzak
+izleme, sunucular arası yedekleme, güvenli uzak erişim ve gerçek hesap uzlaştırması
+ayrı kabul koşullarıdır. Mac'teki mevcut servis bu testin hedefi değildir.
+
+## Önceki paket: PostgreSQL fiziksel yedekten zamana dönüş denemesi
 
 Ayrı CI işi, kendi geçici PostgreSQL 16 ortamında fiziksel temel yedek ve
 arşivlenmiş WAL ile seçilen UTC zamana geri dönüşü sınar. Temel yedekten
@@ -172,7 +186,7 @@ Lint, tip, derleme, gizli bilgi ve bağımlılık kontrolleri başarılı.
 - En az 30 takvim günü ileri paper gözlem, yeterli bağımsız örneklem dışı kanıt,
   maliyet stresi ve piyasa koşulları. Yazılım testleri ekonomik avantaj değildir.
 - Bağımsız kesinti bildirimi/kurtarma, sunucular arası yedek saklama ve geri dönüş,
-  Docker uygulama kurulumu ve güvenli uzak işletim
+  farklı sunucuda kurulum ve güvenli uzak işletim
   doğrulaması; son bağımsız üretim incelemesi ve uygulama içi açık kullanıcı onayı.
 
 Kurulum ve kurtarma: [OPERATIONS.md](docs/OPERATIONS.md).
