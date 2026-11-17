@@ -291,6 +291,14 @@ def test_clean_compose_stack_persists_synthetic_ledgers() -> None:
             assert post_status(api_url + "/api/live/activate") == 409
             wait_worker_running(api_url)
             assert wait_json(web_url + "/api/status")["commit"] == revision
+            # Vite permits IP hosts; the API must still reject a non-loopback
+            # Host forwarded through the proxy instead of silently trusting it.
+            foreign_host = urllib.request.Request(
+                web_url + "/api/status", headers={"Host": "192.0.2.5"}
+            )
+            with pytest.raises(urllib.error.HTTPError) as host_rejected:
+                urllib.request.urlopen(foreign_host, timeout=3)
+            assert host_rejected.value.code == 400
             with pytest.raises(urllib.error.HTTPError) as market_unavailable:
                 get_json(web_url + "/api/symbols?venue=global")
             assert market_unavailable.value.code == 503
