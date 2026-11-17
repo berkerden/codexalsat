@@ -1,4 +1,4 @@
-# Durum — 2026-11-14
+# Durum — 2026-11-17
 
 Public kaynak depo: [berkerden/codexalsat](https://github.com/berkerden/codexalsat).
 Kararlı kaynak dalı main; canlı kullanım öncesi kalan işler issue #2'de izlenir.
@@ -19,7 +19,22 @@ operasyon geçmişi içermez. Üretim işlemleri kod içinde kapalıdır.
 - İleri paper gözlem kaydı: örneklenen sağlıklı kapsam ile takvim süresi ayrı,
   ayar/kod kimliği ve devralınmış geçmiş görünür; JSON rapor indirilebilir.
 
-## Son paket: temiz Docker Compose uygulama doğrulaması
+## Son paket: ayrı ortamda sentetik yedekten kurtarma
+
+İki ayrı CI makinesi, yalnız testte oluşturulan PostgreSQL paper ve SQLite
+Testnet kayıtlarının yedeklenmesini, taşınmasını ve temiz hedefe yüklenmesini
+sınar. Aktarılan dört dosya açıkça sınırlıdır; manifest özeti ayrı iş çıktısından
+alınır. Çalıştırma/deneme/commit kimliği ve dosya bütünlüğü hedef oluşturulmadan
+doğrulanır. Açılış öncesi tüm şema ve satırlar; açılış sonrası güvenli durum,
+finansal geçmiş, arşiv ve hesap bağı kontrol edilir.
+
+Bozuk/eksik içerik, değiştirilmiş manifest, yanlış çalıştırma ve dolu hedef
+reddedilmelidir. Native sonuç kanıtı ilgili PR'nin kaynak ve kurtarma işleridir.
+Yalnız sentetik çıktılar için bir günlük saklama ayarı bulunur; sürenin sonunda
+silinmenin gerçekleştiği ayrıca gözlenmiş değildir. Gerçek harici yedek konumu,
+şifreli saklama ve gerçek hesap kurtarma henüz kurulmuş/doğrulanmış değildir.
+
+## Önceki paket: temiz Docker Compose uygulama doğrulaması
 
 Ayrı CI işi, commit edilmiş kaynaklardan PostgreSQL/API/panel kurulumunu gerçek
 Docker ortamında sınar. Python/Node kilit dosyaları, imaj kaynak sürümü, servis

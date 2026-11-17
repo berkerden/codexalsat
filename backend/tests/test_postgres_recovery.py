@@ -82,7 +82,7 @@ def _tick(engine: PaperEngine, price: str, at: int, *, signal: bool, scope: str)
     )
 
 
-def _seed_source(url: str) -> tuple[dict, dict]:
+def _seed_paper(url: str) -> tuple[dict, dict]:
     with ExitStack() as resources:
         paper = PaperEngine(url)
         resources.callback(paper.db.dispose)
@@ -102,6 +102,11 @@ def _seed_source(url: str) -> tuple[dict, dict]:
         archived = paper.archive_detail(archived_id)
         paper.db.dispose()
 
+        return active, archived
+
+
+def _seed_orders(url: str) -> None:
+    with ExitStack() as resources:
         store = OrderStore(url, recover_submitting=False)
         resources.callback(store.db.dispose)
         store.bind_account(TESTNET_ACCOUNT_VENUE, _UID)
@@ -152,7 +157,13 @@ def _seed_source(url: str) -> tuple[dict, dict]:
                 {"plan": plan.serialize(), "at": _AT},
             )
         store.db.dispose()
-        return active, archived
+
+
+def _seed_source(url: str) -> tuple[dict, dict]:
+    """Seed the combined fixture retained by the existing recovery drills."""
+    paper = _seed_paper(url)
+    _seed_orders(url)
+    return paper
 
 
 def _schema_and_rows(engine: Engine) -> dict[str, object]:
