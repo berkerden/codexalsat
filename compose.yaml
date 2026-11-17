@@ -64,10 +64,6 @@ services:
       retries: 20
     restart: unless-stopped
 
-networks:
-  default:
-    internal: ${INTERNAL_NETWORK:-false}
-
 volumes:
   postgres-data:
   market-data:

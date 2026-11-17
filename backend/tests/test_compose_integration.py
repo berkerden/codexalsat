@@ -250,16 +250,25 @@ def test_clean_compose_stack_persists_synthetic_ledgers() -> None:
                     "CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173",
                     "LIVE_TRADING_ENABLED=false",
                     f"SPOTLAB_BUILD_REVISION={revision}",
-                    "INTERNAL_NETWORK=true",
                     "",
                 ]
             ),
             encoding="utf-8",
         )
         env_file.chmod(0o600)
+        # Keep normal published-port networking; block market HTTP at the API's
+        # client layer instead. HTTPX honors these environment proxies by default.
+        override = context / "integration.compose.json"
+        override.write_text(json.dumps({"services": {"api": {"environment": {
+            "HTTP_PROXY": "http://127.0.0.1:9",
+            "HTTPS_PROXY": "http://127.0.0.1:9",
+            "ALL_PROXY": "http://127.0.0.1:9",
+            "NO_PROXY": "127.0.0.1,localhost,db",
+        }}}}), encoding="utf-8")
         compose = [
             "docker", "compose", "--project-name", project,
             "--env-file", str(env_file),
+            "--file", str(context / "compose.yaml"), "--file", str(override),
         ]
         cleanup_allowed = False
         try:
@@ -282,6 +291,10 @@ def test_clean_compose_stack_persists_synthetic_ledgers() -> None:
             assert post_status(api_url + "/api/live/activate") == 409
             wait_worker_running(api_url)
             assert wait_json(web_url + "/api/status")["commit"] == revision
+            with pytest.raises(urllib.error.HTTPError) as market_unavailable:
+                get_json(web_url + "/api/symbols?venue=global")
+            assert market_unavailable.value.code == 503
+            assert get_json(api_url + "/api/status")["worker_error"] is None
 
             run(compose + ["stop", "api"], cwd=context, env=base_env, timeout=60)
             session_id = run(

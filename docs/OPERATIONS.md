@@ -525,8 +525,10 @@ uygulamayı kontrollü durdurun, yedek alın ve yeni sürümü açıkça yeniden
 
 **Clean Compose application** CI işi, yalnız commit edilmiş kaynakları yeni bir
 geçici klasöre çıkarır. Kendi rastgele proje adını, parolasını, yerel portlarını
-ve volume'larını kullanır; yerel `.env`, hesap veya anahtar almaz. Derleme sonrasında
-test ağı dış bağlantıya kapalıdır. Yapay paper arşivi ve Testnet defteriyle yeniden
+ve volume'larını kullanır; yerel `.env`, hesap veya anahtar almaz. Yalnız test API'sine
+eklenen erişilemeyen yerel HTTP vekili, piyasa sorgularını başarısız kılar;
+gerçek piyasa yanıtı kullanılmadan 503 hata yolu da doğrulanır. Bu, ağ seviyesinde
+tam dış erişim engeli değildir. Yapay paper arşivi ve Testnet defteriyle yeniden
 başlatma/kalıcılık kontrol edilir; API açılışı yeni sanal giriş yetkisini kapatır.
 Tarayıcı API yanıtlarını taklit etmeden panel/proxy üzerinden kayıtları okur.
 Test sonundaki volume temizliği yalnız bu geçici projeye aittir.
