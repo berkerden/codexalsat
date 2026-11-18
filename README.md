@@ -99,6 +99,9 @@ Kapsam ve fiziksel yedekten farkı [kurtarma belgesinde](docs/OPERATIONS.md#post
 Fiziksel yedek ve WAL kayıtlarıyla seçilen zamana dönüş için ayrı bir CI işi
 bulunur; [PITR denemesinin kapsamı](docs/OPERATIONS.md#postgresql-fiziksel-yedek-ve-zamana-dönüş-denemesi)
 gerçek hesapların yedeklenmesi veya üretim kurtarma garantisi anlamına gelmez.
+Ayrı iki CI makinesi arasında yalnız yapay PostgreSQL/SQLite yedekleri taşınır;
+[aktarım ve kurtarma denemesi](docs/OPERATIONS.md#ayrı-ortamda-sentetik-yedekten-kurtarma)
+gerçek harici yedekleme hizmeti kurmaz.
 
 ```bash
 source .venv/bin/activate

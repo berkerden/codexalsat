@@ -436,6 +436,43 @@ büyük veriyle kurtarma süresi veya gerçek hesapta borsa uzlaştırması değ
 Gerçek bir olayda hedef zaman sonrasındaki borsa işlemleri geri alınmış olmaz;
 eski veritabanıyla otomatik işlem açılmadan önce ayrıca uzlaştırılmalıdır.
 
+### Ayrı ortamda sentetik yedekten kurtarma
+
+**Synthetic backup transfer source** ve ardından **Restore transferred synthetic
+backup** işleri, ayrı GitHub barındırılan Linux makinelerinde çalışır. Her işin
+kendi geçici PostgreSQL 16 servisi vardır. Paper kayıtları PostgreSQL'de,
+Testnet defteri SQLite'tadır; yalnız testin ürettiği yapay kayıtlar kullanılır.
+Kaynak veritabanı ve SQLite kaynak dosyası aktarım öncesinde temizlenir.
+
+Yalnız `paper.pgcustom`, `testnet.sqlite`, `expected.json` ve `manifest.json`
+dosyaları, çalıştırma ve deneme numarasıyla adlandırılan GitHub artifact'ına
+yüklenir. Kişisel veriler, gerçek yedekler, `.env`, kimlik bilgileri veya veri
+dizinleri bu yüklemeye dahil değildir. Artifact için `retention-days: 1`
+yapılandırılır; bu ayar, silinmenin gerçekleştiğinin gözlem kanıtı değildir.
+
+Kurtarma işi aynı commit'in test kodunu kullanır. Manifest'in SHA-256 özeti,
+artifact içinden değil kaynak işin ayrı çıktısından alınır. Tam dosya listesi,
+boyutlar, özetler ve çalıştırma/deneme/commit kimliği doğrulanmadan hedef
+oluşturulmaz. Yükleme yalnız yeni geçici hedeflere yapılır. Açılıştan önce tüm
+şema ve satırlar; açılışta giriş yetkisinin kapanması, geçmiş/arşiv/hesap bağının
+korunması ve Testnet panelinin kimlik bilgisi okumadan `idle` kalması sınanır.
+Eksik, kesilmiş, değiştirilmiş, yanlış kimlikli paket ve dolu hedef reddedilir.
+
+Bu test kullanıcıdan yedek veya bağlantı adresi almaz. PostgreSQL arşivleri SQL
+çalıştırabildiğinden yalnız bu güvenilen işin ürettiği sentetik paket kullanılır;
+özet kontrolü, rastgele bir dış yedeği güvenilir yapmaz. Ayrıntılar:
+[GitHub artifact aktarımı](https://docs.github.com/en/actions/tutorials/store-and-share-data)
+ve [PostgreSQL pg_restore](https://www.postgresql.org/docs/16/app-pgrestore.html).
+
+Normal yerel test bu native aşamayı atlar; CI'da açıkça istendiğinde eksik araç
+veya başarısız doğrulama hata verir. Deneme kimliği değiştiğinden yalnız kurtarma
+işini eski artifact ile tekrar çalıştırmak yerine bütün workflow tekrar
+çalıştırılmalıdır. Son sonuç ilgili PR'nin iki ayrı iş kaydındadır.
+
+Bu küçük veri denemesi gerçek harici yedek hizmeti, şifreleme/anahtar ayrımı,
+üretim kurtarma süresi veya gerçek hesap uzlaştırması kanıtı değildir. Gerçek
+yedekler için ayrı depolama konumu seçimi ve işletim düzeni hâlâ gereklidir.
+
 ## Kesinti
 
 Testnet için aynı yerel emir defterini koruyun ve önce salt okunur denetimi çalıştırın:
